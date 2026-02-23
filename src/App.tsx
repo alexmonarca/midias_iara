@@ -25,6 +25,9 @@ import {
   Copy,
   Instagram,
   Loader2,
+  Sparkles,
+  Zap,
+  Smartphone,
   ChevronRight,
   Upload
 } from 'lucide-react';
@@ -118,12 +121,36 @@ export default function App() {
   const [userInput, setUserInput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [lastResult, setLastResult] = useState<{ imageUrl: string, caption: string } | null>(null);
-  const [openOverlay, setOpenOverlay] = useState<'boas-praticas' | 'postar' | null>(null);
+  const [customTone, setCustomTone] = useState('');
 
   // History State
   const [historyItems, setHistoryItems] = useState<any[]>([]);
   const [historyPage, setHistoryPage] = useState(0);
   const [hasMoreHistory, setHasMoreHistory] = useState(true);
+
+  // --- Persistent Chat Loading ---
+  const loadChatHistory = async () => {
+    if (!session) return;
+    try {
+      const { data, error } = await supabase
+        .from('chat_messages')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: true });
+      
+      if (error) throw error;
+      if (data && data.length > 0) {
+        setChatMessages(data.map(m => ({
+          role: m.role,
+          content: m.content,
+          imageUrl: m.image_url,
+          timestamp: new Date(m.created_at).getTime()
+        })));
+      }
+    } catch (error) {
+      console.error('Error loading chat:', error);
+    }
+  };
 
   // UI State
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
@@ -134,6 +161,8 @@ export default function App() {
       setSession(session);
       if (session) {
         loadUserData(session.user.id);
+        loadChatHistory();
+        loadHistory(0);
       }
       setLoading(false);
     });
@@ -142,6 +171,8 @@ export default function App() {
       setSession(session);
       if (session) {
         loadUserData(session.user.id);
+        loadChatHistory();
+        loadHistory(0);
       }
     });
 
@@ -390,6 +421,29 @@ Return the image and then the caption text separated by "---CAPTION---".`;
       if (transError) throw transError;
 
       setCredits(newBalance);
+      
+      // 5. Save to Database
+      const { error: dbError } = await supabase
+        .from('generated_arts')
+        .insert({
+          user_id: session.user.id,
+          image_url: imageUrl,
+          caption: caption,
+          format: selectedFormat,
+          prompt: prompt,
+          cost: cost
+        });
+
+      if (dbError) {
+        console.error('Error saving to DB:', dbError);
+      }
+
+      // 6. Save Chat Messages to DB
+      await supabase.from('chat_messages').insert([
+        { user_id: session.user.id, role: 'user', content: prompt },
+        { user_id: session.user.id, role: 'assistant', content: caption, image_url: imageUrl }
+      ]);
+
       setLastResult({ imageUrl, caption });
       setChatMessages(prev => [...prev, {
         role: 'assistant',
@@ -463,19 +517,18 @@ Return the image and then the caption text separated by "---CAPTION---".`;
 
   const loadHistory = async (page = 0) => {
     try {
-      const { data, error } = await supabase.storage
-        .from('generated-arts')
-        .list(session.user.id, {
-          limit: 12,
-          offset: page * 12,
-          sortBy: { column: 'created_at', order: 'desc' }
-        });
+      const { data, error } = await supabase
+        .from('generated_arts')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: false })
+        .range(page * 12, (page + 1) * 12 - 1);
       
       if (error) throw error;
 
       const itemsWithUrls = data.map(item => ({
         ...item,
-        url: supabase.storage.from('generated-arts').getPublicUrl(`${session.user.id}/${item.name}`).data.publicUrl
+        url: item.image_url
       }));
 
       if (page === 0) {
@@ -499,62 +552,32 @@ Return the image and then the caption text separated by "---CAPTION---".`;
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-bg flex items-center justify-center">
-        <Loader2 className="animate-spin text-brand" size={48} />
+      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="animate-spin text-brand" size={48} />
+          <p className="text-white/40 text-sm animate-pulse">Iniciando ambiente...</p>
+        </div>
       </div>
     );
   }
 
   if (!session) {
     return (
-      <div className="min-h-screen bg-bg flex items-center justify-center p-4">
-        <div 
-          className="w-full max-w-md bg-[#1a1a1a] p-8 rounded-2xl border border-white/5 shadow-2xl"
-        >
-          <div className="text-center mb-8">
-            <h1 className="text-4xl font-display font-bold mb-2">
-              Míd<span className="text-brand">IAs</span>
-            </h1>
-            <p className="text-white/60">Gere criativos e legendas com base na sua marca.</p>
+      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-8 text-center">
+        <div className="max-w-md space-y-6">
+          <div className="w-20 h-20 bg-brand/10 rounded-3xl flex items-center justify-center mx-auto text-brand">
+            <Sparkles size={40} />
           </div>
-
-          <form onSubmit={handleAuth} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-white/40 mb-1.5 ml-1">E-mail</label>
-              <input 
-                type="email" 
-                required
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-brand transition-colors"
-                placeholder="seu@email.com"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-white/40 mb-1.5 ml-1">Senha</label>
-              <input 
-                type="password" 
-                required
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-brand transition-colors"
-                placeholder="••••••••"
-              />
-            </div>
+          <h2 className="text-2xl font-bold">Acesso Restrito</h2>
+          <p className="text-white/40 text-sm">
+            Este gerador é exclusivo para assinantes Premium. Por favor, acesse através do seu painel principal.
+          </p>
+          <div className="pt-4">
             <button 
-              type="submit"
-              className="w-full bg-brand hover:bg-brand/90 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-brand/20"
+              onClick={() => window.location.reload()}
+              className="px-8 py-3 bg-brand text-white font-bold rounded-xl shadow-lg shadow-brand/20"
             >
-              {authMode === 'login' ? 'Entrar' : 'Criar Conta'}
-            </button>
-          </form>
-
-          <div className="mt-6 text-center">
-            <button 
-              onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
-              className="text-sm text-white/40 hover:text-brand transition-colors"
-            >
-              {authMode === 'login' ? 'Não tem uma conta? Cadastre-se' : 'Já tem uma conta? Entre'}
+              Tentar Novamente
             </button>
           </div>
         </div>
@@ -563,546 +586,545 @@ Return the image and then the caption text separated by "---CAPTION---".`;
   }
 
   return (
-    <div className="min-h-screen flex flex-col md:flex-row bg-bg overflow-hidden">
-      {/* Left Panel - 440px */}
-      <aside className="w-full md:w-[440px] flex-shrink-0 border-r border-white/5 flex flex-col h-screen bg-[#0a0a0a]">
-        {/* Header */}
-        <header className="p-6 border-bottom border-white/5">
-          <div className="flex items-center justify-between mb-2">
-            <h1 className="text-2xl font-display font-bold">
-              Míd<span className="text-brand">IAs</span>
-            </h1>
-            <div className="flex items-center gap-3">
-              <div className="bg-white/5 px-3 py-1.5 rounded-full flex items-center gap-2 border border-white/10">
-                <span className="text-xs font-medium text-white/60">💳 Créditos:</span>
-                <span className="text-sm font-bold text-brand">{credits}</span>
-                <a href="#" className="text-[10px] text-white/40 hover:text-white underline ml-1">Adicionar</a>
+    <div className="min-h-screen bg-[#050505] text-white font-sans selection:bg-brand/30">
+      <div className="max-w-[1200px] mx-auto p-8">
+        {/* Left Column: Main Interface */}
+        <div className="space-y-8">
+          {/* Navigation Tabs Bar */}
+          <div className="glass rounded-[32px] p-2 flex items-center gap-2 shadow-[0_0_30px_rgba(0,0,0,0.5)]">
+            <div className="flex-1 flex items-center gap-3 px-6">
+              <div className="w-12 h-12 bg-brand/10 rounded-2xl flex items-center justify-center text-brand animate-pulse-neon">
+                <Sparkles size={24} />
               </div>
-              <button onClick={handleLogout} className="p-2 hover:bg-white/5 rounded-full text-white/40 hover:text-white transition-colors">
-                <LogOut size={18} />
+              <div>
+                <h3 className="text-base font-bold tracking-tight">Geração Criativa</h3>
+                <p className="text-[10px] text-white/40 uppercase tracking-widest font-medium">AI Powered Engine</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 p-1.5 bg-black/40 rounded-[24px] border border-white/5">
+              <button 
+                onClick={() => setActiveTab('geracao')}
+                className={cn(
+                  "px-8 py-3 rounded-2xl text-sm font-bold transition-all duration-300 flex items-center gap-2",
+                  activeTab === 'geracao' ? "btn-gradient text-white shadow-[0_0_20px_rgba(234,88,12,0.4)] scale-105" : "text-white/40 hover:text-white hover:bg-white/5"
+                )}
+              >
+                <Zap size={16} />
+                Gerar
+              </button>
+              <button 
+                onClick={() => setActiveTab('marca')}
+                className={cn(
+                  "px-8 py-3 rounded-2xl text-sm font-bold transition-all duration-300 flex items-center gap-2",
+                  activeTab === 'marca' ? "btn-gradient text-white shadow-[0_0_20px_rgba(234,88,12,0.4)] scale-105" : "text-white/40 hover:text-white hover:bg-white/5"
+                )}
+              >
+                <Palette size={16} />
+                Marca
+              </button>
+              <button 
+                onClick={() => setActiveTab('historico')}
+                className={cn(
+                  "px-8 py-3 rounded-2xl text-sm font-bold transition-all duration-300 flex items-center gap-2",
+                  activeTab === 'historico' ? "btn-gradient text-white shadow-[0_0_20px_rgba(234,88,12,0.4)] scale-105" : "text-white/40 hover:text-white hover:bg-white/5"
+                )}
+              >
+                <History size={16} />
+                Histórico
               </button>
             </div>
-          </div>
-          <p className="text-xs text-white/40">Gere criativos e legendas com base na sua marca.</p>
-        </header>
 
-        {/* Tabs Navigation */}
-        <nav className="px-6 py-2 flex gap-1 border-b border-white/5">
-          {[
-            { id: 'geracao', icon: LayoutGrid, label: 'Geração' },
-            { id: 'marca', icon: Palette, label: 'Marca' },
-            { id: 'historico', icon: History, label: 'Histórico' }
-          ].map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as Tab)}
-              className={cn(
-                "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-all",
-                activeTab === tab.id ? "bg-brand text-white shadow-lg shadow-brand/20" : "text-white/40 hover:text-white hover:bg-white/5"
-              )}
+            <button 
+              onClick={() => {
+                setChatMessages([{ role: 'assistant', content: 'Me diga o que você quer criar e eu gero a arte + legenda no seu estilo. Você só precisa configurar sua marca uma vez na aba "Marca".', timestamp: Date.now() }]);
+                setLastResult(null);
+              }}
+              className="w-12 h-12 flex items-center justify-center text-white/40 hover:text-brand hover:bg-brand/10 rounded-2xl transition-all ml-2 group"
+              title="Resetar"
             >
-              <tab.icon size={16} />
-              {tab.label}
+              <RefreshCw size={20} className="group-hover:rotate-180 transition-transform duration-500" />
             </button>
-          ))}
-        </nav>
+          </div>
 
-        {/* Tab Content */}
-        <div className="flex-1 overflow-y-auto p-6">
-          <AnimatePresence mode="wait">
-            {activeTab === 'geracao' && (
-              <motion.div 
-                key="geracao"
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 10 }}
-                className="flex flex-col h-full"
-              >
-                <div className="mb-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <h2 className="text-lg font-bold">Geração</h2>
-                      <p className="text-xs text-white/40">Prompt + formato → imagem e legenda</p>
-                    </div>
-                    <button className="p-2 hover:bg-white/5 rounded-lg text-white/40">
-                      <RefreshCw size={18} />
-                    </button>
-                  </div>
-
-                  {/* Format Selector */}
-                  <div className="grid grid-cols-2 gap-2 mb-4">
-                    {[
-                      { id: 'texto', icon: Type, label: 'Texto (ideia / legenda)', cost: 2 },
-                      { id: 'quadrado', icon: Square, label: 'Quadrado (1:1)', cost: 10 },
-                      { id: 'retrato', icon: RectangleVertical, label: 'Retrato (4:5)', cost: 10 },
-                      { id: 'story', icon: Monitor, label: 'Story (9:16)', cost: 10 }
-                    ].map(format => (
-                      <button
-                        key={format.id}
-                        onClick={() => setSelectedFormat(format.id as Format)}
-                        className={cn(
-                          "flex items-center gap-3 p-3 rounded-xl border transition-all text-left",
-                          selectedFormat === format.id 
-                            ? "bg-brand/10 border-brand text-white" 
-                            : "bg-white/5 border-white/5 text-white/40 hover:border-white/20"
-                        )}
-                      >
-                        <format.icon size={18} />
-                        <div>
-                          <p className="text-xs font-bold">{format.label}</p>
-                          <p className="text-[10px] opacity-60">{format.cost} créditos</p>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Info Bar */}
-                  <div className="flex items-center justify-between px-3 py-2 bg-white/5 rounded-lg border border-white/5 text-[10px] text-white/40">
-                    <div className="flex items-center gap-2">
-                      {brand.logo_url ? (
-                        <span className="text-emerald-500 flex items-center gap-1">Logo ok ✓</span>
-                      ) : (
-                        <span className="text-white/20">Sem logo</span>
-                      )}
-                      <span className="w-1 h-1 bg-white/10 rounded-full" />
-                      <span>{JSON.parse(brand.reference_images || '[]').length}/3 refs</span>
-                    </div>
-                    <span>Custo: {getCreditCost(selectedFormat)} créditos</span>
-                  </div>
-                </div>
-
-                {/* Chat Interface */}
-                <div className="flex-1 flex flex-col bg-black/40 rounded-2xl border border-white/5 overflow-hidden">
-                  <div className="p-4 border-b border-white/5">
-                    <h3 className="text-sm font-bold">Chat IA Gestor de Mídias</h3>
-                    <p className="text-[10px] text-white/40">Peça artes e legendas como numa conversa</p>
-                  </div>
-                  
-                  <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
-                    {chatMessages.map((msg, i) => (
-                      <div key={i} className={cn("flex flex-col", msg.role === 'user' ? "items-end" : "items-start")}>
-                        <div className={cn(
-                          "max-w-[85%] p-3 rounded-2xl text-sm",
-                          msg.role === 'user' ? "bg-brand text-white rounded-tr-none" : "bg-white/5 text-white/80 rounded-tl-none border border-white/5"
-                        )}>
-                          <div className="markdown-body">
-                            <ReactMarkdown>{msg.content}</ReactMarkdown>
-                          </div>
-                          {msg.imageUrl && (
-                            <div className="mt-3 rounded-lg overflow-hidden border border-white/10">
-                              <img src={msg.imageUrl} alt="Generated" className="w-full h-auto" />
-                            </div>
-                          )}
-                        </div>
-                        <span className="text-[9px] text-white/20 mt-1 px-1">
-                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                    ))}
-                    <div ref={chatEndRef} />
-                  </div>
-
-                  <div className="p-4 bg-white/5 border-t border-white/5">
-                    <div className="relative">
-                      <textarea
-                        value={userInput}
-                        onChange={e => setUserInput(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault();
-                            handleSendMessage();
-                          }
-                        }}
-                        placeholder="Descreva sua arte..."
-                        className="w-full bg-black/60 border border-white/10 rounded-xl pl-4 pr-12 py-3 text-sm focus:outline-none focus:border-brand resize-none h-20"
-                      />
-                      <button 
-                        onClick={handleSendMessage}
-                        disabled={isGenerating || !userInput.trim()}
-                        className="absolute right-3 bottom-3 p-2 bg-brand disabled:bg-white/10 text-white rounded-lg transition-all"
-                      >
-                        {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-
-            {activeTab === 'marca' && (
-              <motion.div 
-                key="marca"
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 10 }}
-                className="space-y-8 pb-10"
-              >
-                <section>
-                  <h3 className="text-sm font-semibold uppercase tracking-wider text-white/40 mb-4">Identidade Visual</h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    {/* Logo Upload */}
-                    <div className="space-y-2">
-                      <label className="text-xs font-medium text-white/60">Logo da Marca</label>
-                      <div 
-                        onClick={() => handleFileUpload('logo')}
-                        className="aspect-square bg-white/5 border-2 border-dashed border-white/10 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-brand/50 transition-all overflow-hidden relative group"
-                      >
-                        {brand.logo_url ? (
-                          <>
-                            <img src={brand.logo_url} className="w-full h-full object-contain p-4" alt="Logo" />
-                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
-                              <Upload size={24} />
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <ImageIcon className="text-white/20 mb-2" size={32} />
-                            <span className="text-[10px] text-white/40">Upload Logo</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Reference Images */}
-                    <div className="space-y-2">
-                      <label className="text-xs font-medium text-white/60">Referências (Estilo)</label>
-                      <div className="grid grid-cols-2 grid-rows-2 gap-2 h-full max-h-[160px]">
-                        {[0, 1, 2].map(i => {
-                          const refs = JSON.parse(brand.reference_images || '[]');
-                          return (
-                            <div 
-                              key={i}
-                              onClick={() => handleFileUpload('ref', i)}
-                              className="bg-white/5 border border-dashed border-white/10 rounded-lg flex items-center justify-center cursor-pointer hover:border-brand/50 overflow-hidden relative group"
-                            >
-                              {refs[i] ? (
-                                <>
-                                  <img src={refs[i]} className="w-full h-full object-cover" alt={`Ref ${i}`} />
-                                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
-                                    <Plus size={16} />
-                                  </div>
-                                </>
-                              ) : (
-                                <Plus className="text-white/20" size={20} />
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                </section>
-
-                <section>
-                  <h3 className="text-sm font-semibold uppercase tracking-wider text-white/40 mb-4">Cores da Marca</h3>
-                  <div className="flex gap-3">
-                    {[0, 1, 2, 3, 4].map(i => (
-                      <div key={i} className="flex flex-col items-center gap-2">
-                        <div className="relative w-12 h-12 rounded-full border border-white/10 overflow-hidden">
-                          <input 
-                            type="color" 
-                            value={brand.colors[i] || '#000000'}
-                            onChange={e => {
-                              const newColors = [...brand.colors];
-                              newColors[i] = e.target.value;
-                              setBrand(prev => ({ ...prev, colors: newColors }));
-                            }}
-                            className="absolute inset-0 w-[200%] h-[200%] -translate-x-1/4 -translate-y-1/4 cursor-pointer"
-                          />
-                        </div>
-                        <span className="text-[10px] font-mono text-white/40 uppercase">{(brand.colors[i] || '#000000').slice(1)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-
-                <section className="space-y-4">
-                  <h3 className="text-sm font-semibold uppercase tracking-wider text-white/40 mb-4">Personalidade & Tom</h3>
-                  
-                  <div>
-                    <label className="block text-xs font-medium text-white/60 mb-2">Tom de Voz</label>
-                    <select 
-                      value={brand.tone_of_voice}
-                      onChange={e => setBrand(prev => ({ ...prev, tone_of_voice: e.target.value }))}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand"
-                    >
-                      <option className="bg-[#1a1a1a]">Profissional</option>
-                      <option className="bg-[#1a1a1a]">Amigável</option>
-                      <option className="bg-[#1a1a1a]">Motivador</option>
-                      <option className="bg-[#1a1a1a]">Divertido</option>
-                      <option className="bg-[#1a1a1a]">Personalizado</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-white/60 mb-2">Descrição da Personalidade</label>
-                    <textarea 
-                      value={(brand.personality || brand.brand_personality) || ''}
-                      onChange={e => setBrand(prev => ({ ...prev, personality: e.target.value, brand_personality: e.target.value }))}
-                      placeholder="Descreva como sua marca se comporta e o que ela valoriza..."
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand h-32 resize-none"
-                    />
-                  </div>
-                </section>
-
-                <button 
-                  onClick={handleSaveBrand}
-                  className="w-full bg-brand text-white font-bold py-4 rounded-xl shadow-lg shadow-brand/20 hover:bg-brand/90 transition-all flex items-center justify-center gap-2"
+          {/* Tab Content Area */}
+          <div className="glass rounded-[48px] overflow-hidden min-h-[650px] flex flex-col shadow-2xl relative">
+            <div className="absolute inset-0 bg-gradient-to-br from-brand/5 via-transparent to-transparent pointer-events-none" />
+            <AnimatePresence mode="wait">
+              {activeTab === 'geracao' && (
+                <motion.div 
+                  key="geracao"
+                  initial={{ opacity: 0, scale: 0.98 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 1.02 }}
+                  className="flex flex-col h-full relative z-10"
                 >
-                  <Check size={20} />
-                  Salvar Marca
-                </button>
-              </motion.div>
-            )}
-
-            {activeTab === 'historico' && (
-              <motion.div 
-                key="historico"
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 10 }}
-                className="space-y-6"
-              >
-                <div className="flex items-center justify-between">
-                  <h2 className="text-lg font-bold">Histórico</h2>
-                  <p className="text-xs text-white/40">Suas artes geradas</p>
-                </div>
-
-                {historyItems.length === 0 ? (
-                  <div className="py-20 text-center space-y-4">
-                    <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mx-auto">
-                      <ImageIcon className="text-white/20" size={32} />
+                  {/* Format Selector Section */}
+                  <div className="p-10 border-b border-white/5 bg-white/[0.02]">
+                    <div className="flex items-center gap-3 mb-8">
+                      <div className="w-2 h-2 bg-brand rounded-full animate-pulse" />
+                      <h4 className="text-xs font-black uppercase tracking-[0.2em] text-white/40">Selecione o Formato</h4>
                     </div>
-                    <p className="text-sm text-white/40">Nenhuma arte gerada ainda. Comece criando sua primeira arte!</p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-2 gap-3">
-                      {historyItems.map((item, i) => (
-                        <div key={i} className="group relative aspect-square bg-white/5 rounded-xl border border-white/5 overflow-hidden">
-                          <img src={item.url} className="w-full h-full object-cover" alt="History" />
-                          <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center p-4">
-                            <p className="text-[10px] text-white/60 mb-3">{new Date(item.created_at).toLocaleDateString()}</p>
-                            <div className="flex gap-2">
-                              <a 
-                                href={item.url} 
-                                download 
-                                className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-all"
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                <Download size={16} />
-                              </a>
-                            </div>
+                    
+                    <div className="flex flex-wrap gap-4">
+                      {[
+                        { id: 'texto', label: 'Texto IA', icon: <Type size={20} /> },
+                        { id: 'quadrado', label: 'Quadrado', icon: <Square size={20} /> },
+                        { id: 'retrato', label: 'Retrato (4:5)', icon: <Smartphone size={20} /> },
+                        { id: 'story', label: 'Story (9:16)', icon: <Smartphone size={20} className="rotate-90" /> },
+                      ].map((format) => (
+                        <button
+                          key={format.id}
+                          onClick={() => setSelectedFormat(format.id as any)}
+                          className={cn(
+                            "group flex items-center gap-4 px-8 py-5 rounded-[24px] border transition-all duration-500 font-bold text-sm relative overflow-hidden",
+                            selectedFormat === format.id 
+                              ? "bg-brand/10 border-brand text-white shadow-[0_0_30px_rgba(234,88,12,0.2)]" 
+                              : "bg-white/5 border-white/5 text-white/40 hover:border-white/20 hover:text-white hover:bg-white/10"
+                          )}
+                        >
+                          <div className={cn(
+                            "transition-transform duration-500 group-hover:scale-110",
+                            selectedFormat === format.id ? "text-brand" : "text-white/40"
+                          )}>
+                            {format.icon}
                           </div>
-                        </div>
+                          {format.label}
+                          {selectedFormat === format.id && (
+                            <motion.div 
+                              layoutId="format-glow"
+                              className="absolute inset-0 bg-brand/5 blur-xl"
+                            />
+                          )}
+                        </button>
                       ))}
                     </div>
-                    {hasMoreHistory && (
-                      <button 
-                        onClick={() => loadHistory(historyPage + 1)}
-                        className="w-full py-3 text-sm text-white/40 hover:text-white hover:bg-white/5 rounded-xl border border-white/5 transition-all"
-                      >
-                        Carregar mais
-                      </button>
-                    )}
-                  </>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      </aside>
+                    <div className="mt-6 flex items-center gap-4">
+                      <p className="text-[10px] font-bold text-white/20 uppercase tracking-widest">
+                        Consumo: {selectedFormat === 'texto' ? '2' : '10'} Créditos
+                      </p>
+                      <div className="h-px flex-1 bg-white/5" />
+                      <p className="text-[10px] font-bold text-brand/60 uppercase tracking-widest">
+                        {brand.logo_url ? 'Logo Ativa ✓' : 'Sem Logo'} • {JSON.parse(brand.reference_images || '[]').filter(Boolean).length}/3 Referências
+                      </p>
+                    </div>
+                  </div>
 
-      {/* Right Panel - Result Area */}
-      <main className="flex-1 flex flex-col h-screen bg-bg relative">
-        {/* Floating Icons Bar (Left side of right panel) */}
-        <div className="absolute left-6 top-1/2 -translate-y-1/2 flex flex-col gap-4 z-40">
-          <div className="relative group">
-            <button 
-              onClick={() => setOpenOverlay(openOverlay === 'boas-praticas' ? null : 'boas-praticas')}
-              onMouseEnter={() => setOpenOverlay('boas-praticas')}
-              className={cn(
-                "w-12 h-12 rounded-full flex items-center justify-center transition-all bg-[#1a1a1a] border border-white/10 shadow-xl",
-                openOverlay === 'boas-praticas' ? "text-brand border-brand" : "text-white/40 hover:text-white"
-              )}
-            >
-              <AlertCircle size={20} />
-            </button>
-            
-            <AnimatePresence>
-              {openOverlay === 'boas-praticas' && (
-                <motion.div 
-                  initial={{ opacity: 0, x: 20, scale: 0.9 }}
-                  animate={{ opacity: 1, x: 60, scale: 1 }}
-                  exit={{ opacity: 0, x: 20, scale: 0.9 }}
-                  className="absolute left-0 top-0 w-72 bg-[#1a1a1a] p-6 rounded-3xl border border-white/10 shadow-2xl z-50"
-                  onMouseLeave={() => setOpenOverlay(null)}
-                >
-                  <h4 className="text-xs font-bold uppercase tracking-widest text-brand mb-4">Boas Práticas</h4>
-                  <ul className="space-y-3 text-xs text-white/60 leading-relaxed">
-                    <li className="flex gap-2">
-                      <span className="text-brand">•</span>
-                      Envie 1–3 referências do seu feed para manter consistência.
-                    </li>
-                    <li className="flex gap-2">
-                      <span className="text-brand">•</span>
-                      Inclua objetivo, oferta, público e CTA no prompt.
-                    </li>
-                    <li className="flex gap-2">
-                      <span className="text-brand">•</span>
-                      Salve sua marca antes de gerar para melhor resultado.
-                    </li>
-                  </ul>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+                  {/* Chat Area */}
+                  <div className="flex-1 flex flex-col min-h-[450px]">
+                    <div className="px-10 py-6 border-b border-white/5 bg-black/40 flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 glass rounded-2xl flex items-center justify-center text-brand neon-border">
+                          <Sparkles size={24} />
+                        </div>
+                        <div>
+                          <h4 className="text-base font-bold tracking-tight">Assistente Criativo</h4>
+                          <p className="text-[10px] text-white/40 font-medium uppercase tracking-wider">Conversational AI Interface</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                        <span className="text-[10px] font-bold text-emerald-500/80 uppercase tracking-widest">Online</span>
+                      </div>
+                    </div>
 
-          <div className="relative group">
-            <button 
-              onClick={() => setOpenOverlay(openOverlay === 'postar' ? null : 'postar')}
-              onMouseEnter={() => setOpenOverlay('postar')}
-              className={cn(
-                "w-12 h-12 rounded-full flex items-center justify-center transition-all bg-[#1a1a1a] border border-white/10 shadow-xl",
-                openOverlay === 'postar' ? "text-brand border-brand" : "text-white/40 hover:text-white"
-              )}
-            >
-              <Instagram size={20} />
-            </button>
+                    <div className="flex-1 p-10 overflow-y-auto space-y-8 max-h-[550px] scrollbar-hide">
+                      {chatMessages.map((msg, i) => (
+                        <motion.div 
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          key={i} 
+                          className={cn(
+                            "flex flex-col max-w-[85%]",
+                            msg.role === 'user' ? "ml-auto items-end" : "items-start"
+                          )}
+                        >
+                          <div className={cn(
+                            "px-8 py-5 rounded-[32px] text-sm leading-relaxed shadow-xl",
+                            msg.role === 'user' 
+                              ? "bg-brand text-white rounded-tr-none shadow-brand/10" 
+                              : "glass text-white/90 rounded-tl-none border-white/10"
+                          )}>
+                            <div className="markdown-body">
+                              <ReactMarkdown>{msg.content}</ReactMarkdown>
+                            </div>
+                            {msg.imageUrl && (
+                              <motion.div 
+                                initial={{ opacity: 0, scale: 0.95 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                className="mt-6 rounded-[24px] overflow-hidden border border-white/10 shadow-2xl group relative"
+                              >
+                                <img src={msg.imageUrl} alt="Generated" className="max-w-full h-auto transition-transform duration-700 group-hover:scale-105" />
+                                <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-6">
+                                  <p className="text-[10px] font-bold text-white uppercase tracking-widest">Preview Gerado</p>
+                                </div>
+                              </motion.div>
+                            )}
+                          </div>
+                          <span className="text-[9px] font-bold text-white/20 mt-2 uppercase tracking-widest px-2">
+                            {msg.role === 'user' ? 'Você' : 'AI Assistant'} • {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </motion.div>
+                      ))}
+                      <div ref={chatEndRef} />
+                    </div>
 
-            <AnimatePresence>
-              {openOverlay === 'postar' && (
-                <motion.div 
-                  initial={{ opacity: 0, x: 20, scale: 0.9 }}
-                  animate={{ opacity: 1, x: 60, scale: 1 }}
-                  exit={{ opacity: 0, x: 20, scale: 0.9 }}
-                  className="absolute left-0 top-0 w-72 bg-[#1a1a1a] p-6 rounded-3xl border border-white/10 shadow-2xl z-50"
-                  onMouseLeave={() => setOpenOverlay(null)}
-                >
-                  <h4 className="text-xs font-bold uppercase tracking-widest text-white/40 mb-4">Postar agora / Agendar</h4>
-                  <div className="space-y-3">
-                    <button className="w-full py-3 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-bold border border-white/10 transition-all flex items-center justify-center gap-2">
-                      <Instagram size={14} />
-                      Conectar Instagram (Meta)
-                    </button>
-                    <button className="w-full py-3 text-[10px] text-white/40 hover:text-white transition-all flex items-center justify-center gap-1">
-                      Ir para Conexões
-                      <ChevronRight size={10} />
-                    </button>
+                    {/* Input Area */}
+                    <div className="p-10 bg-black/40 border-t border-white/5">
+                      <div className="relative group">
+                        <div className="absolute -inset-1 bg-gradient-to-r from-brand/20 to-orange-400/20 rounded-[40px] blur opacity-0 group-focus-within:opacity-100 transition duration-1000" />
+                        <textarea
+                          value={userInput}
+                          onChange={(e) => setUserInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              handleSendMessage();
+                            }
+                          }}
+                          placeholder="Descreva sua ideia com detalhes... (ex: Post elegante para joalheria)"
+                          className="relative w-full bg-black/60 border border-white/10 rounded-[36px] px-10 py-8 pr-24 text-sm focus:outline-none focus:border-brand/50 transition-all resize-none h-28 shadow-2xl placeholder:text-white/20"
+                        />
+                        <button 
+                          onClick={handleSendMessage}
+                          disabled={isGenerating || !userInput.trim()}
+                          className="absolute right-6 bottom-6 w-16 h-16 btn-gradient text-white rounded-full flex items-center justify-center shadow-2xl shadow-brand/30 hover:scale-110 active:scale-95 transition-all disabled:opacity-50 disabled:hover:scale-100 group"
+                        >
+                          {isGenerating ? <Loader2 size={24} className="animate-spin" /> : <Send size={24} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </motion.div>
               )}
-            </AnimatePresence>
-          </div>
-        </div>
 
-        {/* Backdrop for closing overlays */}
-        {openOverlay && (
-          <div 
-            className="absolute inset-0 z-30" 
-            onClick={() => setOpenOverlay(null)}
-          />
-        )}
-
-        <div className="flex-1 flex flex-col overflow-y-auto">
-          {isGenerating ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-10 space-y-6">
-              <div className="relative">
-                <div className="w-24 h-24 border-4 border-brand/20 rounded-full animate-pulse" />
-                <Loader2 className="absolute inset-0 m-auto text-brand animate-spin" size={40} />
-              </div>
-              <div className="text-center">
-                <h2 className="text-2xl font-display font-bold mb-2">Gerando seu pedido com IA...</h2>
-                <p className="text-white/40">Isso pode levar alguns segundos.</p>
-              </div>
-            </div>
-          ) : lastResult ? (
-            <div className="flex-1 p-8 md:p-12 flex flex-col items-center">
-              <motion.div 
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="w-full max-w-2xl space-y-8"
-              >
-                {/* Image Result */}
-                <div className="relative group">
-                  <div className={cn(
-                    "bg-[#1a1a1a] rounded-3xl border border-white/10 shadow-2xl overflow-hidden flex items-center justify-center",
-                    selectedFormat === 'quadrado' ? "aspect-square" : 
-                    selectedFormat === 'retrato' ? "aspect-[4/5]" : 
-                    selectedFormat === 'story' ? "aspect-[9/16] max-h-[70vh]" : "min-h-[200px]"
-                  )}>
-                    {lastResult.imageUrl ? (
-                      <img src={lastResult.imageUrl} className="w-full h-full object-contain" alt="Result" />
-                    ) : (
-                      <div className="flex flex-col items-center text-white/20">
-                        <Type size={64} />
-                        <p className="mt-4 font-bold">Legenda Gerada</p>
-                      </div>
-                    )}
+              {activeTab === 'marca' && (
+                <motion.div 
+                  key="marca"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="p-12 space-y-12 relative z-10"
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold tracking-tight">DNA da Marca</h2>
+                      <p className="text-xs text-white/40 mt-1 uppercase tracking-widest font-bold">Configure a identidade visual e verbal</p>
+                    </div>
+                    <div className="w-12 h-12 glass rounded-2xl flex items-center justify-center text-brand neon-border">
+                      <Palette size={24} />
+                    </div>
                   </div>
                   
-                  {lastResult.imageUrl && (
-                    <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                      <a 
-                        href={lastResult.imageUrl} 
-                        download 
-                        className="p-3 bg-black/60 backdrop-blur-md hover:bg-brand rounded-full text-white transition-all shadow-xl"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <Download size={20} />
-                      </a>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+                    <section className="space-y-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-1.5 h-1.5 bg-brand rounded-full" />
+                        <label className="text-xs font-black uppercase tracking-[0.2em] text-white/40">Identidade Visual</label>
+                      </div>
+                      <div className="grid grid-cols-2 gap-6">
+                        <div className="space-y-3">
+                          <p className="text-[10px] font-bold text-white/60 uppercase tracking-widest">Logo Master</p>
+                          <button 
+                            onClick={() => handleFileUpload('logo')}
+                            className="w-full aspect-video glass rounded-[24px] flex flex-col items-center justify-center gap-3 hover:bg-white/10 transition-all overflow-hidden group relative"
+                          >
+                            {brand.logo_url ? (
+                              <img src={brand.logo_url} className="w-full h-full object-contain p-6 transition-transform duration-500 group-hover:scale-110" alt="Logo" />
+                            ) : (
+                              <>
+                                <Upload size={24} className="text-white/20 group-hover:text-brand transition-colors" />
+                                <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Upload PNG</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <div className="space-y-3">
+                          <p className="text-[10px] font-bold text-white/60 uppercase tracking-widest">Paleta de Cores</p>
+                          <input 
+                            type="text" 
+                            placeholder="#HEX, #HEX"
+                            value={Array.isArray(brand.colors) ? brand.colors.join(', ') : brand.colors}
+                            onChange={(e) => setBrand(prev => ({ ...prev, colors: e.target.value.split(',').map(c => c.trim()) }))}
+                            className="w-full glass rounded-[20px] px-6 py-4 text-sm focus:outline-none focus:border-brand/50 transition-all font-mono"
+                          />
+                          <div className="flex gap-1.5">
+                            {(Array.isArray(brand.colors) ? brand.colors : []).slice(0, 5).map((c, i) => (
+                              <div key={i} className="w-4 h-4 rounded-full border border-white/10 shadow-lg" style={{ backgroundColor: c }} />
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="space-y-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-1.5 h-1.5 bg-brand rounded-full" />
+                        <label className="text-xs font-black uppercase tracking-[0.2em] text-white/40">Moodboard de Estilo</label>
+                      </div>
+                      <div className="grid grid-cols-3 gap-4">
+                        {[0, 1, 2].map(i => (
+                          <button 
+                            key={i}
+                            onClick={() => handleFileUpload('ref', i)}
+                            className="aspect-square glass rounded-[24px] flex items-center justify-center hover:bg-white/10 transition-all overflow-hidden group relative"
+                          >
+                            {JSON.parse(brand.reference_images || '[]')[i] ? (
+                              <img src={JSON.parse(brand.reference_images || '[]')[i]} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-120" alt="Ref" />
+                            ) : (
+                              <Plus size={24} className="text-white/20 group-hover:text-brand transition-colors" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+                    <section className="space-y-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-1.5 h-1.5 bg-brand rounded-full" />
+                        <label className="text-xs font-black uppercase tracking-[0.2em] text-white/40">Tom de Voz</label>
+                      </div>
+                      <div className="space-y-4">
+                        <div className="relative">
+                          <select 
+                            value={['Profissional', 'Amigável', 'Motivador', 'Divertido'].includes(brand.tone_of_voice) ? brand.tone_of_voice : 'Personalizado'}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === 'Personalizado') {
+                                setBrand(prev => ({ ...prev, tone_of_voice: customTone || 'Personalizado' }));
+                              } else {
+                                setBrand(prev => ({ ...prev, tone_of_voice: val }));
+                              }
+                            }}
+                            className="w-full glass rounded-[24px] px-8 py-5 text-sm focus:outline-none focus:border-brand/50 appearance-none cursor-pointer font-bold"
+                          >
+                            <option value="Profissional" className="bg-[#1a1a1a]">Profissional</option>
+                            <option value="Amigável" className="bg-[#1a1a1a]">Amigável</option>
+                            <option value="Motivador" className="bg-[#1a1a1a]">Motivador</option>
+                            <option value="Divertido" className="bg-[#1a1a1a]">Divertido</option>
+                            <option value="Personalizado" className="bg-[#1a1a1a]">Personalizado</option>
+                          </select>
+                          <div className="absolute right-6 top-1/2 -translate-y-1/2 pointer-events-none text-white/40">
+                            <ChevronRight size={16} className="rotate-90" />
+                          </div>
+                        </div>
+
+                        <AnimatePresence>
+                          {(!['Profissional', 'Amigável', 'Motivador', 'Divertido'].includes(brand.tone_of_voice) || brand.tone_of_voice === 'Personalizado') && (
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="overflow-hidden"
+                            >
+                              <div className="relative">
+                                <input 
+                                  type="text"
+                                  maxLength={15}
+                                  placeholder="Defina seu tom (ex: Rebelde)"
+                                  value={brand.tone_of_voice === 'Personalizado' ? customTone : brand.tone_of_voice}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setCustomTone(val);
+                                    setBrand(prev => ({ ...prev, tone_of_voice: val }));
+                                  }}
+                                  className="w-full glass rounded-[20px] px-6 py-4 text-sm focus:outline-none focus:border-brand/50 transition-all font-bold placeholder:text-white/20"
+                                />
+                                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-bold text-white/20 uppercase">
+                                  {brand.tone_of_voice.length}/15
+                                </span>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    </section>
+
+                    <section className="space-y-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-1.5 h-1.5 bg-brand rounded-full" />
+                        <label className="text-xs font-black uppercase tracking-[0.2em] text-white/40">Personalidade da Marca</label>
+                      </div>
+                      <textarea 
+                        placeholder="Descreva a alma da sua marca... (ex: Inovadora, disruptiva e focada em tecnologia de ponta)"
+                        value={brand.personality}
+                        onChange={(e) => setBrand(prev => ({ ...prev, personality: e.target.value }))}
+                        className="w-full glass rounded-[24px] px-8 py-6 text-sm focus:outline-none focus:border-brand/50 h-36 resize-none shadow-inner placeholder:text-white/20"
+                      />
+                    </section>
+                  </div>
+
+                  <button 
+                    onClick={handleSaveBrand}
+                    className="w-full btn-gradient text-white font-black py-6 rounded-[28px] shadow-2xl shadow-brand/20 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-3 uppercase tracking-[0.2em] text-sm"
+                  >
+                    <Check size={20} />
+                    Consolidar DNA da Marca
+                  </button>
+                </motion.div>
+              )}
+
+              {activeTab === 'historico' && (
+                <motion.div 
+                  key="historico"
+                  initial={{ opacity: 0, scale: 1.05 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  className="p-12 space-y-10 relative z-10"
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold tracking-tight">Arquivo de Criações</h2>
+                      <p className="text-xs text-white/40 mt-1 uppercase tracking-widest font-bold">Histórico completo de gerações</p>
+                    </div>
+                    <div className="w-12 h-12 glass rounded-2xl flex items-center justify-center text-brand neon-border">
+                      <History size={24} />
+                    </div>
+                  </div>
+
+                  {historyItems.length === 0 ? (
+                    <div className="py-40 text-center space-y-6">
+                      <div className="w-24 h-24 glass rounded-full flex items-center justify-center mx-auto animate-float">
+                        <ImageIcon className="text-white/10" size={48} />
+                      </div>
+                      <p className="text-sm font-bold text-white/20 uppercase tracking-[0.3em]">Nenhum registro encontrado</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                      {historyItems.map((item, i) => (
+                        <motion.div 
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: i * 0.05 }}
+                          key={i} 
+                          className="group glass rounded-[32px] border-white/5 overflow-hidden flex flex-col shadow-2xl hover:neon-border transition-all duration-500"
+                        >
+                          <div className="aspect-square relative overflow-hidden bg-black/40">
+                            {item.url ? (
+                              <img src={item.url} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt="History" />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-white/5">
+                                <Type size={64} />
+                              </div>
+                            )}
+                            <div className="absolute top-4 right-4 px-4 py-2 bg-black/80 backdrop-blur-md rounded-full text-[10px] font-black text-brand border border-brand/20 shadow-xl">
+                              -{item.cost || 10} CRÉDITOS
+                            </div>
+                          </div>
+                          <div className="p-6 space-y-4">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-black text-brand uppercase tracking-widest">{item.format}</span>
+                              <span className="text-[10px] font-bold text-white/20 uppercase tracking-widest">{new Date(item.created_at).toLocaleDateString()}</span>
+                            </div>
+                            <p className="text-xs text-white/60 line-clamp-2 italic font-medium leading-relaxed">"{item.prompt}"</p>
+                            <div className="flex gap-3 pt-2">
+                              <button 
+                                onClick={() => {
+                                  setLastResult({ imageUrl: item.image_url, caption: item.caption });
+                                  setActiveTab('geracao');
+                                }}
+                                className="flex-1 py-3 glass hover:bg-white/10 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all"
+                              >
+                                Detalhes
+                              </button>
+                              {item.url && (
+                                <a 
+                                  href={item.url} 
+                                  download 
+                                  className="p-3 glass hover:bg-brand hover:text-white rounded-2xl transition-all group/btn"
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  <Download size={16} className="group-hover/btn:scale-110 transition-transform" />
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        </motion.div>
+                      ))}
                     </div>
                   )}
+                  
+                  {hasMoreHistory && historyItems.length > 0 && (
+                    <button 
+                      onClick={() => loadHistory(historyPage + 1)}
+                      className="w-full py-6 glass hover:bg-white/5 rounded-[28px] text-xs font-black uppercase tracking-[0.3em] text-white/40 hover:text-white transition-all border-white/5"
+                    >
+                      Carregar mais resultados
+                    </button>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+      </div>
+
+      {/* Result Overlay (When an image is generated) */}
+      <AnimatePresence>
+        {lastResult && activeTab === 'geracao' && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-sm flex items-center justify-center p-6"
+          >
+            <div className="max-w-4xl w-full bg-[#141414] rounded-[40px] border border-white/10 overflow-hidden shadow-2xl flex flex-col md:flex-row max-h-[90vh]">
+              <div className="flex-1 bg-black/40 flex items-center justify-center p-8">
+                {lastResult.imageUrl ? (
+                  <img src={lastResult.imageUrl} className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl" alt="Result" />
+                ) : (
+                  <div className="flex flex-col items-center text-white/20">
+                    <Type size={80} />
+                    <p className="mt-4 font-bold">Legenda Gerada</p>
+                  </div>
+                )}
+              </div>
+              <div className="w-full md:w-[400px] p-8 flex flex-col border-l border-white/5">
+                <div className="flex items-center justify-between mb-6">
+                  <h4 className="text-xs font-bold uppercase tracking-widest text-white/40">Resultado</h4>
+                  <button onClick={() => setLastResult(null)} className="p-2 hover:bg-white/5 rounded-full transition-all">
+                    <Plus size={24} className="rotate-45" />
+                  </button>
                 </div>
 
-                {/* Caption Result */}
-                <div className="bg-[#1a1a1a] rounded-3xl border border-white/10 p-6 shadow-xl relative group">
-                  <div className="flex items-center justify-between mb-4">
-                    <h4 className="text-xs font-bold uppercase tracking-widest text-white/40">Legenda Sugerida</h4>
-                    <button 
-                      onClick={() => {
-                        navigator.clipboard.writeText(lastResult.caption);
-                        showToast('Legenda copiada!');
-                      }}
-                      className="p-2 hover:bg-white/5 rounded-lg text-white/40 hover:text-white transition-all flex items-center gap-2 text-xs"
-                    >
-                      <Copy size={14} />
-                      Copiar
-                    </button>
-                  </div>
-                  <div className="text-white/80 leading-relaxed markdown-body">
+                <div className="flex-1 overflow-y-auto mb-6">
+                  <div className="p-6 bg-white/5 rounded-3xl border border-white/5 text-sm leading-relaxed text-white/80 markdown-body">
                     <ReactMarkdown>{lastResult.caption}</ReactMarkdown>
                   </div>
                 </div>
 
-                {/* Actions */}
-                <div className="flex flex-wrap gap-4 justify-center">
-                  <button className="px-8 py-4 bg-brand text-white font-bold rounded-2xl shadow-lg shadow-brand/20 hover:scale-105 transition-all flex items-center gap-3">
-                    <Instagram size={20} />
-                    Usar no Instagram
-                  </button>
+                <div className="space-y-3">
                   <button 
-                    onClick={() => setLastResult(null)}
-                    className="px-8 py-4 bg-white/5 text-white font-bold rounded-2xl border border-white/10 hover:bg-white/10 transition-all flex items-center gap-3"
+                    onClick={() => {
+                      navigator.clipboard.writeText(lastResult.caption);
+                      showToast('Legenda copiada!');
+                    }}
+                    className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-xs font-bold border border-white/10 transition-all flex items-center justify-center gap-2"
                   >
-                    <Plus size={20} />
-                    Nova Arte
+                    <Copy size={16} />
+                    Copiar Legenda
                   </button>
+                  {lastResult.imageUrl && (
+                    <a 
+                      href={lastResult.imageUrl} 
+                      download 
+                      className="w-full py-4 bg-brand text-white rounded-2xl text-xs font-bold shadow-lg shadow-brand/20 hover:bg-brand/90 transition-all flex items-center justify-center gap-2"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <Download size={16} />
+                      Baixar Arte
+                    </a>
+                  )}
                 </div>
-              </motion.div>
-            </div>
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center p-10 opacity-20">
-              <div className="w-32 h-32 bg-white/5 rounded-full flex items-center justify-center mb-6">
-                <ImageIcon size={64} />
               </div>
-              <p className="text-xl font-display font-medium">Sua obra de arte aparecerá aqui</p>
             </div>
-          )}
-        </div>
-      </main>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Toast Notification */}
       <AnimatePresence>
