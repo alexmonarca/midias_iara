@@ -29,7 +29,12 @@ import {
   Zap,
   Smartphone,
   ChevronRight,
-  Upload
+  Upload,
+  Pencil,
+  Menu,
+  X,
+  Cpu,
+  CreditCard
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -122,6 +127,8 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [lastResult, setLastResult] = useState<{ imageUrl: string, caption: string } | null>(null);
   const [customTone, setCustomTone] = useState('');
+  const [editingImage, setEditingImage] = useState<string | null>(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // History State
   const [historyItems, setHistoryItems] = useState<any[]>([]);
@@ -253,7 +260,8 @@ export default function App() {
       return;
     }
 
-    const userMsg: ChatMessage = { role: 'user', content: userInput, timestamp: Date.now() };
+    const prompt = userInput.trim();
+    const userMsg: ChatMessage = { role: 'user', content: prompt, timestamp: Date.now() };
     setChatMessages(prev => [...prev, userMsg]);
     setUserInput('');
     setIsGenerating(true);
@@ -283,6 +291,7 @@ export default function App() {
 
       const logoBase64 = brandInfo.logoUrl ? await fetchAsBase64(brandInfo.logoUrl) : null;
       const refsBase64 = await Promise.all(brandInfo.refs.map((url: string) => fetchAsBase64(url)));
+      const editBase64 = editingImage ? await fetchAsBase64(editingImage) : null;
 
       // 3. Build Gemini Request
       const formatLabels = {
@@ -294,7 +303,7 @@ export default function App() {
 
       const isTextOnly = selectedFormat === 'texto';
 
-      const systemInstruction = isTextOnly 
+      let systemInstruction = isTextOnly 
         ? `You are a professional social media copywriter. Write a caption in Brazilian Portuguese for a brand with the following identity:
 Colors: ${brandInfo.colors.join(', ')}. Tone of voice: ${brandInfo.tone}. Brand personality: ${brandInfo.personality}.
 Include relevant hashtags matching the brand tone. DO NOT generate any image description or image content.`
@@ -302,8 +311,19 @@ Include relevant hashtags matching the brand tone. DO NOT generate any image des
 Colors: ${brandInfo.colors.join(', ')}. Tone of voice: ${brandInfo.tone}. Brand personality: ${brandInfo.personality}.
 The brand logo is included as a reference image — incorporate it visibly in the composition.
 The other reference images show the brand's visual style — follow that aesthetic.
+
+CRITICAL FOR TEXT RENDERING:
+- If the user asks for specific text in the image, render it clearly and accurately.
+- Use simple, legible typography.
+- Double-check the spelling of every word.
+- Keep text elements minimal and well-spaced to avoid distortion.
+
 Also write a caption in Brazilian Portuguese with relevant hashtags matching the brand tone.
 Return the image and then the caption text separated by "---CAPTION---".`;
+
+      if (editingImage && !isTextOnly) {
+        systemInstruction += `\n\nIMPORTANT: You are EDITING an existing image provided as the last reference. Modify it based on the user's request while maintaining the brand style and logo.`;
+      }
 
       // Build Chat History for Context (Ensure it starts with 'user' and alternates)
       let historyContext = chatMessages.map(msg => ({
@@ -330,12 +350,15 @@ Return the image and then the caption text separated by "---CAPTION---".`;
         finalHistory.pop();
       }
 
-      const lastMessageParts: any[] = [{ text: userInput }];
+      const lastMessageParts: any[] = [{ text: prompt }];
       if (!isTextOnly) {
         if (logoBase64) lastMessageParts.push({ inlineData: { mimeType: 'image/png', data: logoBase64 } });
         refsBase64.forEach(data => {
           if (data) lastMessageParts.push({ inlineData: { mimeType: 'image/png', data } });
         });
+        if (editBase64) {
+          lastMessageParts.push({ inlineData: { mimeType: 'image/png', data: editBase64 } });
+        }
       }
 
       const imageConfigMap: Record<string, string> = {
@@ -430,8 +453,8 @@ Return the image and then the caption text separated by "---CAPTION---".`;
           image_url: imageUrl,
           caption: caption,
           format: selectedFormat,
-          prompt: prompt,
-          cost: cost
+          prompt: prompt
+          // cost: cost // Removido pois a coluna não existe no banco
         });
 
       if (dbError) {
@@ -457,6 +480,7 @@ Return the image and then the caption text separated by "---CAPTION---".`;
       showToast(error.message || 'Erro ao gerar conteúdo', 'error');
     } finally {
       setIsGenerating(false);
+      setEditingImage(null);
     }
   };
 
@@ -563,92 +587,329 @@ Return the image and then the caption text separated by "---CAPTION---".`;
 
   if (!session) {
     return (
-      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-8 text-center">
-        <div className="max-w-md space-y-6">
-          <div className="w-20 h-20 bg-brand/10 rounded-3xl flex items-center justify-center mx-auto text-brand">
-            <Sparkles size={40} />
+      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-8">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="max-w-md w-full glass p-10 rounded-[40px] shadow-2xl space-y-8"
+        >
+          <div className="text-center space-y-4">
+            <div className="w-20 h-20 bg-brand/10 rounded-3xl flex items-center justify-center mx-auto text-brand animate-pulse-neon">
+              <Sparkles size={40} />
+            </div>
+            <h2 className="text-3xl font-bold tracking-tight">
+              {authMode === 'login' ? 'Bem-vindo de volta' : 'Criar sua conta'}
+            </h2>
+            <p className="text-white/40 text-sm">
+              {authMode === 'login' 
+                ? 'Acesse sua conta para começar a criar.' 
+                : 'Junte-se a nós e transforme suas ideias em artes.'}
+            </p>
           </div>
-          <h2 className="text-2xl font-bold">Acesso Restrito</h2>
-          <p className="text-white/40 text-sm">
-            Este gerador é exclusivo para assinantes Premium. Por favor, acesse através do seu painel principal.
-          </p>
-          <div className="pt-4">
+
+          <form onSubmit={handleAuth} className="space-y-6">
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase tracking-widest text-white/40 ml-4">E-mail</label>
+              <input 
+                type="email" 
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full bg-black/40 border border-white/10 rounded-2xl px-6 py-4 text-sm focus:outline-none focus:border-brand/50 transition-all"
+                placeholder="seu@email.com"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase tracking-widest text-white/40 ml-4">Senha</label>
+              <input 
+                type="password" 
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-black/40 border border-white/10 rounded-2xl px-6 py-4 text-sm focus:outline-none focus:border-brand/50 transition-all"
+                placeholder="••••••••"
+              />
+            </div>
+
             <button 
-              onClick={() => window.location.reload()}
-              className="px-8 py-3 bg-brand text-white font-bold rounded-xl shadow-lg shadow-brand/20"
+              type="submit"
+              className="w-full btn-gradient text-white font-black py-5 rounded-2xl shadow-xl shadow-brand/20 hover:scale-[1.02] active:scale-[0.98] transition-all uppercase tracking-[0.2em] text-sm"
             >
-              Tentar Novamente
+              {authMode === 'login' ? 'Entrar' : 'Cadastrar'}
+            </button>
+          </form>
+
+          <div className="text-center">
+            <button 
+              onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
+              className="text-xs font-bold text-white/40 hover:text-brand transition-colors uppercase tracking-widest"
+            >
+              {authMode === 'login' ? 'Não tem uma conta? Cadastre-se' : 'Já tem uma conta? Entre aqui'}
             </button>
           </div>
-        </div>
+        </motion.div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#050505] text-white font-sans selection:bg-brand/30">
-      <div className="max-w-[1200px] mx-auto p-8">
-        {/* Left Column: Main Interface */}
-        <div className="space-y-8">
-          {/* Navigation Tabs Bar */}
-          <div className="glass rounded-[32px] p-2 flex items-center gap-2 shadow-[0_0_30px_rgba(0,0,0,0.5)]">
-            <div className="flex-1 flex items-center gap-3 px-6">
-              <div className="w-12 h-12 bg-brand/10 rounded-2xl flex items-center justify-center text-brand animate-pulse-neon">
-                <Sparkles size={24} />
-              </div>
-              <div>
-                <h3 className="text-base font-bold tracking-tight">Geração Criativa</h3>
-                <p className="text-[10px] text-white/40 uppercase tracking-widest font-medium">AI Powered Engine</p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 p-1.5 bg-black/40 rounded-[24px] border border-white/5">
-              <button 
-                onClick={() => setActiveTab('geracao')}
-                className={cn(
-                  "px-8 py-3 rounded-2xl text-sm font-bold transition-all duration-300 flex items-center gap-2",
-                  activeTab === 'geracao' ? "btn-gradient text-white shadow-[0_0_20px_rgba(234,88,12,0.4)] scale-105" : "text-white/40 hover:text-white hover:bg-white/5"
-                )}
-              >
-                <Zap size={16} />
-                Gerar
-              </button>
-              <button 
-                onClick={() => setActiveTab('marca')}
-                className={cn(
-                  "px-8 py-3 rounded-2xl text-sm font-bold transition-all duration-300 flex items-center gap-2",
-                  activeTab === 'marca' ? "btn-gradient text-white shadow-[0_0_20px_rgba(234,88,12,0.4)] scale-105" : "text-white/40 hover:text-white hover:bg-white/5"
-                )}
-              >
-                <Palette size={16} />
-                Marca
-              </button>
-              <button 
-                onClick={() => setActiveTab('historico')}
-                className={cn(
-                  "px-8 py-3 rounded-2xl text-sm font-bold transition-all duration-300 flex items-center gap-2",
-                  activeTab === 'historico' ? "btn-gradient text-white shadow-[0_0_20px_rgba(234,88,12,0.4)] scale-105" : "text-white/40 hover:text-white hover:bg-white/5"
-                )}
-              >
-                <History size={16} />
-                Histórico
-              </button>
-            </div>
-
-            <button 
-              onClick={() => {
-                setChatMessages([{ role: 'assistant', content: 'Me diga o que você quer criar e eu gero a arte + legenda no seu estilo. Você só precisa configurar sua marca uma vez na aba "Marca".', timestamp: Date.now() }]);
-                setLastResult(null);
+    <div className="min-h-screen bg-[#030712] text-white font-sans selection:bg-brand/30 flex flex-col lg:flex-row">
+      {/* Desktop Sidebar */}
+      <aside className="hidden lg:flex w-72 bg-[#111827] border-r border-white/5 flex-col sticky top-0 h-screen z-[60]">
+        <div className="p-8">
+          <div className="flex items-center gap-3 mb-10">
+            <img 
+              src="https://app.monarcahub.com/logo-iara.png" 
+              alt="IARA Logo" 
+              className="h-10 w-auto"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = 'https://picsum.photos/seed/iara/200/80';
               }}
-              className="w-12 h-12 flex items-center justify-center text-white/40 hover:text-brand hover:bg-brand/10 rounded-2xl transition-all ml-2 group"
-              title="Resetar"
-            >
-              <RefreshCw size={20} className="group-hover:rotate-180 transition-transform duration-500" />
-            </button>
+            />
           </div>
 
+          <nav className="space-y-2">
+            {[
+              { label: 'Visão Geral', icon: <LayoutGrid size={20} />, href: 'https://app.monarcahub.com/' },
+              { label: 'Treinar IA', icon: <Cpu size={20} />, href: 'https://app.monarcahub.com/treinar-ia' },
+              { label: 'Conexões', icon: <Smartphone size={20} />, href: 'https://app.monarcahub.com/conexoes' },
+              { label: 'MídIAs', icon: <ImageIcon size={20} />, href: '/', active: true },
+              { label: 'Assinatura', icon: <CreditCard size={20} />, href: 'https://app.monarcahub.com/assinatura' },
+              { label: 'Minha Conta', icon: <User size={20} />, href: 'https://app.monarcahub.com/minha-conta' },
+            ].map((link) => (
+              <a
+                key={link.label}
+                href={link.href}
+                className={cn(
+                  "flex items-center gap-4 px-6 py-4 rounded-2xl text-sm font-bold transition-all duration-300",
+                  link.active 
+                    ? "bg-white/5 text-brand shadow-[inset_0_0_20px_rgba(234,88,12,0.05)] border border-brand/20" 
+                    : "text-white/40 hover:text-white hover:bg-white/5"
+                )}
+              >
+                <div className={cn(
+                  "transition-colors duration-300",
+                  link.active ? "text-brand" : "text-white/40"
+                )}>
+                  {link.icon}
+                </div>
+                {link.label}
+              </a>
+            ))}
+          </nav>
+        </div>
+
+        <div className="mt-auto p-8 border-t border-white/5 space-y-6">
+          <div className="text-center">
+            <p className="text-[10px] font-bold text-white/20 uppercase tracking-widest mb-1">Desenvolvido por</p>
+            <p className="text-xs font-black text-brand uppercase tracking-wider">Monarca Hub</p>
+          </div>
+          
+          <button 
+            onClick={handleLogout}
+            className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-2xl text-sm font-bold text-white/40 hover:text-red-500 hover:bg-red-500/10 transition-all group"
+          >
+            <LogOut size={20} className="group-hover:-translate-x-1 transition-transform" />
+            Sair
+          </button>
+        </div>
+      </aside>
+
+      <main className="flex-1 overflow-y-auto">
+        <div className="max-w-[1200px] mx-auto p-4 md:p-8">
+          {/* Left Column: Main Interface */}
+          <div className="space-y-6 md:space-y-8">
+            {/* Navigation Tabs Bar */}
+            <div className="glass rounded-[24px] md:rounded-[32px] p-2 flex items-center justify-between md:justify-start gap-2 shadow-[0_0_30px_rgba(0,0,0,0.5)] relative z-50">
+              <div className="flex items-center gap-3 px-4 md:px-6">
+                <div className="w-10 h-10 md:w-12 md:h-12 bg-brand/10 rounded-xl md:rounded-2xl flex items-center justify-center text-brand animate-pulse-neon">
+                  <Sparkles size={20} className="md:hidden" />
+                  <Sparkles size={24} className="hidden md:block" />
+                </div>
+                <div>
+                  <h3 className="text-sm md:text-base font-bold tracking-tight">Geração Criativa</h3>
+                  <p className="text-[9px] md:text-[10px] text-white/40 uppercase tracking-widest font-medium">AI Powered Engine</p>
+                </div>
+                
+                {/* Mobile Credits Badge */}
+                <div className="md:hidden flex items-center gap-1.5 px-3 py-1.5 bg-brand/10 rounded-full border border-brand/20">
+                  <Zap size={10} className="text-brand" />
+                  <span className="text-[9px] font-black text-brand">{credits}</span>
+                </div>
+                
+                {/* Desktop Credits */}
+                <div className="hidden lg:flex items-center gap-3 ml-6 px-4 py-2 bg-white/5 rounded-2xl border border-white/5">
+                  <Zap size={14} className="text-brand" />
+                  <span className="text-[10px] font-black text-white/40 uppercase tracking-widest">Créditos:</span>
+                  <span className="text-xs font-black text-brand">{credits}</span>
+                </div>
+              </div>
+
+              {/* Desktop Navigation */}
+              <div className="hidden md:flex flex-1 items-center justify-end gap-2">
+                <div className="flex items-center gap-2 p-1.5 bg-black/40 rounded-[24px] border border-white/5">
+                  <button 
+                    onClick={() => setActiveTab('geracao')}
+                    className={cn(
+                      "px-8 py-3 rounded-2xl text-sm font-bold transition-all duration-300 flex items-center gap-2",
+                      activeTab === 'geracao' ? "btn-gradient text-white shadow-[0_0_20px_rgba(234,88,12,0.4)] scale-105" : "text-white/40 hover:text-white hover:bg-white/5"
+                    )}
+                  >
+                    <Zap size={16} />
+                    Gerar
+                  </button>
+                  <button 
+                    onClick={() => setActiveTab('marca')}
+                    className={cn(
+                      "px-8 py-3 rounded-2xl text-sm font-bold transition-all duration-300 flex items-center gap-2",
+                      activeTab === 'marca' ? "btn-gradient text-white shadow-[0_0_20px_rgba(234,88,12,0.4)] scale-105" : "text-white/40 hover:text-white hover:bg-white/5"
+                    )}
+                  >
+                    <Palette size={16} />
+                    Marca
+                  </button>
+                  <button 
+                    onClick={() => setActiveTab('historico')}
+                    className={cn(
+                      "px-8 py-3 rounded-2xl text-sm font-bold transition-all duration-300 flex items-center gap-2",
+                      activeTab === 'historico' ? "btn-gradient text-white shadow-[0_0_20px_rgba(234,88,12,0.4)] scale-105" : "text-white/40 hover:text-white hover:bg-white/5"
+                    )}
+                  >
+                    <History size={16} />
+                    Histórico
+                  </button>
+                </div>
+
+                <button 
+                  onClick={() => {
+                    setChatMessages([{ role: 'assistant', content: 'Me diga o que você quer criar e eu gero a arte + legenda no seu estilo. Você só precisa configurar sua marca uma vez na aba "Marca".', timestamp: Date.now() }]);
+                    setLastResult(null);
+                  }}
+                  className="w-12 h-12 flex items-center justify-center text-white/40 hover:text-brand hover:bg-brand/10 rounded-2xl transition-all ml-2 group"
+                  title="Resetar"
+                >
+                  <RefreshCw size={20} className="group-hover:rotate-180 transition-transform duration-500" />
+                </button>
+
+                <button 
+                  onClick={handleLogout}
+                  className="w-12 h-12 flex items-center justify-center text-white/40 hover:text-red-500 hover:bg-red-500/10 rounded-2xl transition-all ml-2 group"
+                  title="Sair"
+                >
+                  <LogOut size={20} />
+                </button>
+              </div>
+
+              {/* Mobile Menu Toggle */}
+              <button 
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                className="md:hidden w-10 h-10 flex items-center justify-center text-white/60 hover:text-white bg-white/5 rounded-xl transition-all mr-2"
+              >
+                {isMobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+              </button>
+
+              {/* Mobile Menu Overlay */}
+              <AnimatePresence>
+                {isMobileMenuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -20 }}
+                    className="absolute top-full left-0 right-0 mt-2 p-4 bg-[#111827] backdrop-blur-2xl rounded-[24px] shadow-2xl md:hidden flex flex-col gap-2 z-50 border border-white/10"
+                  >
+                    <div className="px-6 py-4 mb-2 bg-brand/10 rounded-xl border border-brand/20 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <Zap size={18} className="text-brand" />
+                        <span className="text-xs font-bold uppercase tracking-widest text-white/60">Seus Créditos</span>
+                      </div>
+                      <span className="text-sm font-black text-brand">{credits}</span>
+                    </div>
+
+                    {/* App Navigation */}
+                    <div className="grid grid-cols-3 gap-2 mb-4">
+                      <button 
+                        onClick={() => { setActiveTab('geracao'); setIsMobileMenuOpen(false); }}
+                        className={cn(
+                          "flex flex-col items-center gap-2 p-4 rounded-xl text-[10px] font-bold transition-all",
+                          activeTab === 'geracao' ? "bg-brand text-white" : "bg-white/5 text-white/60"
+                        )}
+                      >
+                        <Zap size={18} />
+                        Gerar
+                      </button>
+                      <button 
+                        onClick={() => { setActiveTab('marca'); setIsMobileMenuOpen(false); }}
+                        className={cn(
+                          "flex flex-col items-center gap-2 p-4 rounded-xl text-[10px] font-bold transition-all",
+                          activeTab === 'marca' ? "bg-brand text-white" : "bg-white/5 text-white/60"
+                        )}
+                      >
+                        <Palette size={18} />
+                        Marca
+                      </button>
+                      <button 
+                        onClick={() => { setActiveTab('historico'); setIsMobileMenuOpen(false); }}
+                        className={cn(
+                          "flex flex-col items-center gap-2 p-4 rounded-xl text-[10px] font-bold transition-all",
+                          activeTab === 'historico' ? "bg-brand text-white" : "bg-white/5 text-white/60"
+                        )}
+                      >
+                        <History size={18} />
+                        Histórico
+                      </button>
+                    </div>
+
+                    <div className="h-px bg-white/10 my-2" />
+
+                    {/* Sidebar Links in Mobile */}
+                    <div className="space-y-1">
+                      {[
+                        { label: 'Visão Geral', icon: <LayoutGrid size={18} />, href: 'https://app.monarcahub.com/' },
+                        { label: 'Treinar IA', icon: <Cpu size={18} />, href: 'https://app.monarcahub.com/treinar-ia' },
+                        { label: 'Conexões', icon: <Smartphone size={18} />, href: 'https://app.monarcahub.com/conexoes' },
+                        { label: 'Assinatura', icon: <CreditCard size={18} />, href: 'https://app.monarcahub.com/assinatura' },
+                        { label: 'Minha Conta', icon: <User size={18} />, href: 'https://app.monarcahub.com/minha-conta' },
+                      ].map((link) => (
+                        <a
+                          key={link.label}
+                          href={link.href}
+                          className="flex items-center gap-4 px-6 py-4 rounded-xl text-sm font-bold text-white/40 hover:text-white hover:bg-white/5 transition-all"
+                        >
+                          {link.icon}
+                          {link.label}
+                        </a>
+                      ))}
+                    </div>
+                    
+                    <div className="h-px bg-white/10 my-2" />
+                    
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => {
+                          setChatMessages([{ role: 'assistant', content: 'Me diga o que você quer criar e eu gero a arte + legenda no seu estilo. Você só precisa configurar sua marca uma vez na aba "Marca".', timestamp: Date.now() }]);
+                          setLastResult(null);
+                          setIsMobileMenuOpen(false);
+                        }}
+                        className="flex-1 px-6 py-4 bg-white/5 rounded-xl text-sm font-bold text-white/60 flex items-center justify-center gap-3"
+                      >
+                        <RefreshCw size={18} />
+                        Resetar
+                      </button>
+                      <button 
+                        onClick={() => { handleLogout(); setIsMobileMenuOpen(false); }}
+                        className="flex-1 px-6 py-4 bg-red-500/10 rounded-xl text-sm font-bold text-red-500 flex items-center justify-center gap-3"
+                      >
+                        <LogOut size={18} />
+                        Sair
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
           {/* Tab Content Area */}
-          <div className="glass rounded-[48px] overflow-hidden min-h-[650px] flex flex-col shadow-2xl relative">
+          <div className="glass rounded-[32px] md:rounded-[48px] overflow-hidden min-h-[500px] md:min-h-[650px] flex flex-col shadow-2xl relative">
             <div className="absolute inset-0 bg-gradient-to-br from-brand/5 via-transparent to-transparent pointer-events-none" />
             <AnimatePresence mode="wait">
               {activeTab === 'geracao' && (
@@ -660,24 +921,24 @@ Return the image and then the caption text separated by "---CAPTION---".`;
                   className="flex flex-col h-full relative z-10"
                 >
                   {/* Format Selector Section */}
-                  <div className="p-10 border-b border-white/5 bg-white/[0.02]">
-                    <div className="flex items-center gap-3 mb-8">
+                  <div className="p-6 md:p-10 border-b border-white/5 bg-white/[0.02]">
+                    <div className="flex items-center gap-3 mb-6 md:mb-8">
                       <div className="w-2 h-2 bg-brand rounded-full animate-pulse" />
-                      <h4 className="text-xs font-black uppercase tracking-[0.2em] text-white/40">Selecione o Formato</h4>
+                      <h4 className="text-[10px] md:text-xs font-black uppercase tracking-[0.2em] text-white/40">Selecione o Formato</h4>
                     </div>
                     
-                    <div className="flex flex-wrap gap-4">
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
                       {[
-                        { id: 'texto', label: 'Texto IA', icon: <Type size={20} /> },
-                        { id: 'quadrado', label: 'Quadrado', icon: <Square size={20} /> },
-                        { id: 'retrato', label: 'Retrato (4:5)', icon: <Smartphone size={20} /> },
-                        { id: 'story', label: 'Story (9:16)', icon: <Smartphone size={20} className="rotate-90" /> },
+                        { id: 'texto', label: 'Texto IA', icon: <Type size={18} /> },
+                        { id: 'quadrado', label: 'Quadrado', icon: <Square size={18} /> },
+                        { id: 'retrato', label: 'Retrato (4:5)', icon: <Smartphone size={18} /> },
+                        { id: 'story', label: 'Story (9:16)', icon: <Smartphone size={18} /> },
                       ].map((format) => (
                         <button
                           key={format.id}
                           onClick={() => setSelectedFormat(format.id as any)}
                           className={cn(
-                            "group flex items-center gap-4 px-8 py-5 rounded-[24px] border transition-all duration-500 font-bold text-sm relative overflow-hidden",
+                            "group flex items-center gap-3 md:gap-4 px-4 md:px-8 py-4 md:py-5 rounded-[20px] md:rounded-[24px] border transition-all duration-500 font-bold text-xs md:text-sm relative overflow-hidden",
                             selectedFormat === format.id 
                               ? "bg-brand/10 border-brand text-white shadow-[0_0_30px_rgba(234,88,12,0.2)]" 
                               : "bg-white/5 border-white/5 text-white/40 hover:border-white/20 hover:text-white hover:bg-white/10"
@@ -689,7 +950,7 @@ Return the image and then the caption text separated by "---CAPTION---".`;
                           )}>
                             {format.icon}
                           </div>
-                          {format.label}
+                          <span className="truncate">{format.label}</span>
                           {selectedFormat === format.id && (
                             <motion.div 
                               layoutId="format-glow"
@@ -699,11 +960,11 @@ Return the image and then the caption text separated by "---CAPTION---".`;
                         </button>
                       ))}
                     </div>
-                    <div className="mt-6 flex items-center gap-4">
+                    <div className="mt-4 md:mt-6 flex flex-col md:flex-row md:items-center gap-4">
                       <p className="text-[10px] font-bold text-white/20 uppercase tracking-widest">
                         Consumo: {selectedFormat === 'texto' ? '2' : '10'} Créditos
                       </p>
-                      <div className="h-px flex-1 bg-white/5" />
+                      <div className="hidden md:block h-px flex-1 bg-white/5" />
                       <p className="text-[10px] font-bold text-brand/60 uppercase tracking-widest">
                         {brand.logo_url ? 'Logo Ativa ✓' : 'Sem Logo'} • {JSON.parse(brand.reference_images || '[]').filter(Boolean).length}/3 Referências
                       </p>
@@ -770,9 +1031,36 @@ Return the image and then the caption text separated by "---CAPTION---".`;
                     </div>
 
                     {/* Input Area */}
-                    <div className="p-10 bg-black/40 border-t border-white/5">
+                    <div className="p-6 md:p-10 bg-black/40 border-t border-white/5">
+                      <AnimatePresence>
+                        {editingImage && (
+                          <motion.div 
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            className="mb-4 md:mb-6 relative group"
+                          >
+                            <div className="flex items-center gap-3 md:gap-4 p-3 md:p-4 glass rounded-2xl md:rounded-3xl border-brand/30 bg-brand/5">
+                              <div className="w-12 h-12 md:w-16 md:h-16 rounded-lg md:rounded-xl overflow-hidden border border-white/10">
+                                <img src={editingImage} alt="Edit target" className="w-full h-full object-cover" />
+                              </div>
+                              <div className="flex-1">
+                                <p className="text-[9px] md:text-[10px] font-black text-brand uppercase tracking-widest">Modo de Edição Ativado</p>
+                                <p className="text-[10px] md:text-xs text-white/60">A IA usará esta imagem como base.</p>
+                              </div>
+                              <button 
+                                onClick={() => setEditingImage(null)}
+                                className="p-2 hover:bg-white/10 rounded-full text-white/40 hover:text-white transition-all"
+                              >
+                                <Plus size={18} className="rotate-45" />
+                              </button>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                      
                       <div className="relative group">
-                        <div className="absolute -inset-1 bg-gradient-to-r from-brand/20 to-orange-400/20 rounded-[40px] blur opacity-0 group-focus-within:opacity-100 transition duration-1000" />
+                        <div className="absolute -inset-1 bg-gradient-to-r from-brand/20 to-orange-400/20 rounded-[30px] md:rounded-[40px] blur opacity-0 group-focus-within:opacity-100 transition duration-1000" />
                         <textarea
                           value={userInput}
                           onChange={(e) => setUserInput(e.target.value)}
@@ -782,15 +1070,16 @@ Return the image and then the caption text separated by "---CAPTION---".`;
                               handleSendMessage();
                             }
                           }}
-                          placeholder="Descreva sua ideia com detalhes... (ex: Post elegante para joalheria)"
-                          className="relative w-full bg-black/60 border border-white/10 rounded-[36px] px-10 py-8 pr-24 text-sm focus:outline-none focus:border-brand/50 transition-all resize-none h-28 shadow-2xl placeholder:text-white/20"
+                          placeholder="Descreva sua ideia..."
+                          className="relative w-full bg-black/60 border border-white/10 rounded-[24px] md:rounded-[36px] px-6 md:px-10 py-6 md:py-8 pr-20 md:pr-24 text-xs md:text-sm focus:outline-none focus:border-brand/50 transition-all resize-none h-24 md:h-28 shadow-2xl placeholder:text-white/20"
                         />
                         <button 
                           onClick={handleSendMessage}
                           disabled={isGenerating || !userInput.trim()}
-                          className="absolute right-6 bottom-6 w-16 h-16 btn-gradient text-white rounded-full flex items-center justify-center shadow-2xl shadow-brand/30 hover:scale-110 active:scale-95 transition-all disabled:opacity-50 disabled:hover:scale-100 group"
+                          className="absolute right-4 md:right-6 bottom-4 md:bottom-6 w-12 h-12 md:w-16 md:h-16 btn-gradient text-white rounded-full flex items-center justify-center shadow-2xl shadow-brand/30 hover:scale-110 active:scale-95 transition-all disabled:opacity-50 disabled:hover:scale-100 group"
                         >
-                          {isGenerating ? <Loader2 size={24} className="animate-spin" /> : <Send size={24} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />}
+                          {isGenerating ? <Loader2 size={20} className="animate-spin md:hidden" /> : <Send size={20} className="md:hidden group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />}
+                          {isGenerating ? <Loader2 size={24} className="animate-spin hidden md:block" /> : <Send size={24} className="hidden md:block group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />}
                         </button>
                       </div>
                     </div>
@@ -1030,6 +1319,20 @@ Return the image and then the caption text separated by "---CAPTION---".`;
                                 Detalhes
                               </button>
                               {item.url && (
+                                <button 
+                                  onClick={() => {
+                                    setEditingImage(item.url);
+                                    setActiveTab('geracao');
+                                    setUserInput('Edite esta imagem: ');
+                                    showToast('Modo de edição ativado!');
+                                  }}
+                                  className="p-3 glass hover:bg-white/10 rounded-2xl transition-all group/edit"
+                                  title="Editar"
+                                >
+                                  <Pencil size={16} className="group-hover/edit:text-brand transition-colors" />
+                                </button>
+                              )}
+                              {item.url && (
                                 <a 
                                   href={item.url} 
                                   download 
@@ -1061,6 +1364,7 @@ Return the image and then the caption text separated by "---CAPTION---".`;
           </div>
         </div>
       </div>
+    </main>
 
       {/* Result Overlay (When an image is generated) */}
       <AnimatePresence>
@@ -1118,6 +1422,21 @@ Return the image and then the caption text separated by "---CAPTION---".`;
                       <Download size={16} />
                       Baixar Arte
                     </a>
+                  )}
+                  {lastResult.imageUrl && (
+                    <button 
+                      onClick={() => {
+                        setEditingImage(lastResult.imageUrl);
+                        setLastResult(null);
+                        setActiveTab('geracao');
+                        setUserInput('Edite esta imagem: ');
+                        showToast('Modo de edição ativado! Descreva as mudanças.');
+                      }}
+                      className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-xs font-bold border border-white/10 transition-all flex items-center justify-center gap-2 text-white/60 hover:text-white"
+                    >
+                      <Pencil size={16} />
+                      Editar Imagem
+                    </button>
                   )}
                 </div>
               </div>
