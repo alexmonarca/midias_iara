@@ -140,7 +140,7 @@ export default function App() {
 
   // --- Persistent Chat Loading ---
   const loadChatHistory = async () => {
-    if (!session) return;
+    if (!session?.user) return;
     try {
       const { data, error } = await supabase
         .from('chat_messages')
@@ -199,6 +199,7 @@ export default function App() {
   };
 
   const loadUserData = async (userId: string) => {
+    if (!userId) return;
     try {
       // Load Profile
       const { data: profileData, error: profileError } = await supabase
@@ -307,9 +308,18 @@ export default function App() {
       const isTextOnly = selectedFormat === 'texto';
 
       let systemInstruction = isTextOnly 
-        ? `You are a professional social media copywriter. Write a caption in Brazilian Portuguese for a brand with the following identity:
-Colors: ${brandInfo.colors.join(', ')}. Tone of voice: ${brandInfo.tone}. Brand personality: ${brandInfo.personality}.
-Include relevant hashtags matching the brand tone. DO NOT generate any image description or image content.`
+        ? `Você é um especialista em estratégia criativa e copywriting para redes sociais da Monarca Hub. 
+Sua missão é ajudar o usuário a planejar conteúdos, criar legendas, sugerir ideias de posts, calendários editoriais e alinhar estratégias de marca.
+Identidade da marca do usuário:
+Cores: ${brandInfo.colors.join(', ')}. Tom de voz: ${brandInfo.tone}. Personalidade: ${brandInfo.personality}.
+
+Diretrizes:
+- Responda sempre em Português Brasileiro.
+- Seja criativo, estratégico e prestativo. 
+- Se o usuário pedir uma legenda, forneça-a com hashtags relevantes. 
+- Se ele pedir ideias ou planejamento, aja como um consultor de marketing experiente.
+- Você pode sugerir legendas mesmo quando o usuário pede ideias, mas foque no que foi solicitado.
+- NUNCA tente gerar imagens ou descrever prompts de imagem neste modo de texto.`
         : `You are a professional social media designer. Generate a ${formatLabels[selectedFormat]} for a brand with the following identity:
 Colors: ${brandInfo.colors.join(', ')}. Tone of voice: ${brandInfo.tone}. Brand personality: ${brandInfo.personality}.
 The brand logo is included as a reference image — incorporate it visibly in the composition.
@@ -374,19 +384,19 @@ Return the image and then the caption text separated by "---CAPTION---".`;
       
       const config: any = {
         systemInstruction: systemInstruction,
-        generationConfig: {
-          responseModalities: isTextOnly ? ["TEXT"] : ["TEXT", "IMAGE"]
-        }
       };
 
       if (!isTextOnly) {
+        config.generationConfig = {
+          responseModalities: ["TEXT", "IMAGE"]
+        };
         config.imageConfig = {
           aspectRatio: imageConfigMap[selectedFormat] || '1:1'
         };
       }
 
       const result = await genAI.models.generateContent({
-        model: "gemini-2.5-flash-image",
+        model: isTextOnly ? "gemini-3-flash-preview" : "gemini-2.5-flash-image",
         contents: [
           ...finalHistory,
           { role: 'user', parts: lastMessageParts }
@@ -543,6 +553,7 @@ Return the image and then the caption text separated by "---CAPTION---".`;
   };
 
   const loadHistory = async (page = 0) => {
+    if (!session?.user) return;
     try {
       const { data, error } = await supabase
         .from('generated_arts')
