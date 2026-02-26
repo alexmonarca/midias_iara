@@ -34,7 +34,9 @@ import {
   Menu,
   X,
   Cpu,
-  CreditCard
+  CreditCard,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -129,6 +131,7 @@ export default function App() {
   const [customTone, setCustomTone] = useState('');
   const [editingImage, setEditingImage] = useState<string | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   // History State
   const [historyItems, setHistoryItems] = useState<any[]>([]);
@@ -598,11 +601,11 @@ Return the image and then the caption text separated by "---CAPTION---".`;
               <Sparkles size={40} />
             </div>
             <h2 className="text-3xl font-bold tracking-tight">
-              {authMode === 'login' ? 'Bem-vindo de volta' : 'Criar sua conta'}
+              {authMode === 'login' ? 'Confirme para entrar' : 'Criar sua conta'}
             </h2>
             <p className="text-white/40 text-sm">
               {authMode === 'login' 
-                ? 'Acesse sua conta para começar a criar.' 
+                ? 'Seus créditos estão prontos! Acesse com mesmo login e senha de sua conta.' 
                 : 'Junte-se a nós e transforme suas ideias em artes.'}
             </p>
           </div>
@@ -621,14 +624,23 @@ Return the image and then the caption text separated by "---CAPTION---".`;
             </div>
             <div className="space-y-2">
               <label className="text-xs font-bold uppercase tracking-widest text-white/40 ml-4">Senha</label>
-              <input 
-                type="password" 
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-black/40 border border-white/10 rounded-2xl px-6 py-4 text-sm focus:outline-none focus:border-brand/50 transition-all"
-                placeholder="••••••••"
-              />
+              <div className="relative">
+                <input 
+                  type={showPassword ? "text" : "password"} 
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-2xl px-6 py-4 pr-14 text-sm focus:outline-none focus:border-brand/50 transition-all"
+                  placeholder="••••••••"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 p-2 text-white/20 hover:text-white transition-colors"
+                >
+                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                </button>
+              </div>
             </div>
 
             <button 
@@ -640,12 +652,12 @@ Return the image and then the caption text separated by "---CAPTION---".`;
           </form>
 
           <div className="text-center">
-            <button 
-              onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
+            <a 
+              href="https://app.monarcahub.com/"
               className="text-xs font-bold text-white/40 hover:text-brand transition-colors uppercase tracking-widest"
             >
-              {authMode === 'login' ? 'Não tem uma conta? Cadastre-se' : 'Já tem uma conta? Entre aqui'}
-            </button>
+              Voltar para o Início
+            </a>
           </div>
         </motion.div>
       </div>
