@@ -51,6 +51,15 @@ function cn(...inputs: ClassValue[]) {
 }
 
 // --- Types ---
+declare global {
+  interface Window {
+    aistudio: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
+  }
+}
+
 type Tab = 'geracao' | 'marca' | 'historico';
 type Format = 'texto' | 'quadrado' | 'retrato' | 'story';
 
@@ -331,8 +340,7 @@ CRITICAL FOR TEXT RENDERING:
 - Double-check the spelling of every word.
 - Keep text elements minimal and well-spaced to avoid distortion.
 
-Also write a caption in Brazilian Portuguese with relevant hashtags matching the brand tone.
-Return the image and then the caption text separated by "---CAPTION---".`;
+DO NOT write any caption or text outside the image. Return ONLY the image data.`;
 
       if (editingImage && !isTextOnly) {
         systemInstruction += `\n\nIMPORTANT: You are EDITING an existing image provided as the last reference. Modify it based on the user's request while maintaining the brand style and logo.`;
@@ -391,12 +399,13 @@ Return the image and then the caption text separated by "---CAPTION---".`;
           responseModalities: ["TEXT", "IMAGE"]
         };
         config.imageConfig = {
-          aspectRatio: imageConfigMap[selectedFormat] || '1:1'
+          aspectRatio: imageConfigMap[selectedFormat] || '1:1',
+          imageSize: "1K"
         };
       }
 
       const result = await genAI.models.generateContent({
-        model: isTextOnly ? "gemini-3-flash-preview" : "gemini-2.5-flash-image",
+        model: isTextOnly ? "gemini-3.1-pro-preview" : "gemini-3.1-flash-image-preview",
         contents: [
           ...finalHistory,
           { role: 'user', parts: lastMessageParts }
@@ -466,8 +475,8 @@ Return the image and then the caption text separated by "---CAPTION---".`;
           image_url: imageUrl,
           caption: caption,
           format: selectedFormat,
-          prompt: prompt
-          // cost: cost // Removido pois a coluna não existe no banco
+          prompt: prompt,
+          cost: cost
         });
 
       if (dbError) {
@@ -480,7 +489,14 @@ Return the image and then the caption text separated by "---CAPTION---".`;
         { user_id: session.user.id, role: 'assistant', content: caption, image_url: imageUrl }
       ]);
 
-      setLastResult({ imageUrl, caption });
+      // Only show popup if it's an image generation
+      if (!isTextOnly) {
+        setLastResult({ imageUrl, caption });
+      } else {
+        setLastResult(null);
+        showToast('Conteúdo gerado com sucesso!');
+      }
+
       setChatMessages(prev => [...prev, {
         role: 'assistant',
         content: caption,
@@ -494,6 +510,53 @@ Return the image and then the caption text separated by "---CAPTION---".`;
     } finally {
       setIsGenerating(false);
       setEditingImage(null);
+    }
+  };
+
+  const handleGenerateCaption = async () => {
+    if (!lastResult?.imageUrl || isGenerating) return;
+    if (credits < 2) {
+      showToast('Créditos insuficientes para gerar legenda (Necessário: 2)', 'error');
+      return;
+    }
+
+    setIsGenerating(true);
+    try {
+      const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+      const model = genAI.models.generateContent({
+        model: "gemini-3.1-pro-preview",
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: `Gere uma legenda estratégica e criativa em Português Brasileiro para este post. 
+Identidade da marca: ${brand.brand_personality || brand.personality}, Tom: ${brand.tone_of_voice}. 
+Contexto do post: ${userInput || 'Imagem gerada pela IARA'}.
+Inclua hashtags relevantes.` }
+            ]
+          }
+        ]
+      });
+
+      const response = await model;
+      const caption = response.text || '';
+
+      // Deduct credits
+      const newBalance = credits - 2;
+      await supabase.from('profiles').update({ credits_balance: newBalance }).eq('id', session.user.id);
+      await supabase.from('credit_transactions').insert({
+        user_id: session.user.id,
+        amount: -2,
+        description: 'Geração de legenda avulsa'
+      });
+
+      setCredits(newBalance);
+      setLastResult(prev => prev ? { ...prev, caption } : null);
+      showToast('Legenda gerada com sucesso! (-2 créditos)');
+    } catch (error: any) {
+      showToast('Erro ao gerar legenda: ' + error.message, 'error');
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -601,7 +664,7 @@ Return the image and then the caption text separated by "---CAPTION---".`;
 
   if (!session) {
     return (
-      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-8">
+      <div className="min-h-screen bg-[#030712] flex items-center justify-center p-8">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -612,12 +675,10 @@ Return the image and then the caption text separated by "---CAPTION---".`;
               <Sparkles size={40} />
             </div>
             <h2 className="text-3xl font-bold tracking-tight">
-              {authMode === 'login' ? 'Confirme para entrar' : 'Criar sua conta'}
+              Confirme para entrar
             </h2>
             <p className="text-white/40 text-sm">
-              {authMode === 'login' 
-                ? 'Seus créditos estão prontos! Acesse com mesmo login e senha de sua conta.' 
-                : 'Junte-se a nós e transforme suas ideias em artes.'}
+              Seus créditos estão prontos! Acesse com mesmo login e senha de sua conta.
             </p>
           </div>
 
@@ -658,7 +719,7 @@ Return the image and then the caption text separated by "---CAPTION---".`;
               type="submit"
               className="w-full btn-gradient text-white font-black py-5 rounded-2xl shadow-xl shadow-brand/20 hover:scale-[1.02] active:scale-[0.98] transition-all uppercase tracking-[0.2em] text-sm"
             >
-              {authMode === 'login' ? 'Entrar' : 'Cadastrar'}
+              Entrar
             </button>
           </form>
 
@@ -933,6 +994,41 @@ Return the image and then the caption text separated by "---CAPTION---".`;
 
           {/* Tab Content Area */}
           <div className="glass rounded-[32px] md:rounded-[48px] overflow-hidden min-h-[500px] md:min-h-[650px] flex flex-col shadow-2xl relative">
+            {/* Loading Overlay */}
+            <AnimatePresence>
+              {isGenerating && (
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="absolute inset-0 z-50 bg-[#030712]/80 backdrop-blur-md flex flex-col items-center justify-center p-12 text-center"
+                >
+                  <div className="relative">
+                    <div className="w-24 h-24 border-4 border-brand/20 border-t-brand rounded-full animate-spin" />
+                    <Sparkles className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-brand animate-pulse" size={32} />
+                  </div>
+                  <div className="mt-8 space-y-2">
+                    <h3 className="text-xl font-bold tracking-tight">IARA está criando...</h3>
+                    <p className="text-sm text-white/40 max-w-[280px] mx-auto leading-relaxed">
+                      {selectedFormat === 'texto' 
+                        ? "Consultando estratégias e refinando sua cópia..." 
+                        : "Renderizando sua arte em alta definição (1K)..."}
+                    </p>
+                  </div>
+                  <div className="mt-12 flex gap-1">
+                    {[0, 1, 2].map(i => (
+                      <motion.div 
+                        key={i}
+                        animate={{ scale: [1, 1.5, 1], opacity: [0.3, 1, 0.3] }}
+                        transition={{ repeat: Infinity, duration: 1.5, delay: i * 0.2 }}
+                        className="w-2 h-2 bg-brand rounded-full"
+                      />
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             <div className="absolute inset-0 bg-gradient-to-br from-brand/5 via-transparent to-transparent pointer-events-none" />
             <AnimatePresence mode="wait">
               {activeTab === 'geracao' && (
@@ -1304,44 +1400,51 @@ Return the image and then the caption text separated by "---CAPTION---".`;
                       <p className="text-sm font-bold text-white/20 uppercase tracking-[0.3em]">Nenhum registro encontrado</p>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                    <div className="space-y-4">
                       {historyItems.map((item, i) => (
                         <motion.div 
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
+                          initial={{ opacity: 0, x: -20 }}
+                          animate={{ opacity: 1, x: 0 }}
                           transition={{ delay: i * 0.05 }}
                           key={i} 
-                          className="group glass rounded-[32px] border-white/5 overflow-hidden flex flex-col shadow-2xl hover:neon-border transition-all duration-500"
+                          className="group glass rounded-2xl border-white/5 p-4 flex items-center gap-6 hover:bg-white/5 transition-all duration-300"
                         >
-                          <div className="aspect-square relative overflow-hidden bg-black/40">
+                          {/* Icon/Preview */}
+                          <div className="w-12 h-12 rounded-xl overflow-hidden bg-black/40 flex-shrink-0 flex items-center justify-center border border-white/10">
                             {item.url ? (
-                              <img src={item.url} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt="History" />
+                              <img src={item.url} className="w-full h-full object-cover" alt="Art" />
                             ) : (
-                              <div className="w-full h-full flex items-center justify-center text-white/5">
-                                <Type size={64} />
-                              </div>
+                              <Type size={20} className="text-brand" />
                             )}
-                            <div className="absolute top-4 right-4 px-4 py-2 bg-black/80 backdrop-blur-md rounded-full text-[10px] font-black text-brand border border-brand/20 shadow-xl">
-                              -{item.cost || 10} CRÉDITOS
-                            </div>
                           </div>
-                          <div className="p-6 space-y-4">
-                            <div className="flex items-center justify-between">
+
+                          {/* Info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-3 mb-1">
                               <span className="text-[10px] font-black text-brand uppercase tracking-widest">{item.format}</span>
-                              <span className="text-[10px] font-bold text-white/20 uppercase tracking-widest">{new Date(item.created_at).toLocaleDateString()}</span>
+                              <span className="text-[10px] font-bold text-white/20 uppercase tracking-widest">
+                                {new Date(item.created_at).toLocaleDateString()}
+                              </span>
                             </div>
-                            <p className="text-xs text-white/60 line-clamp-2 italic font-medium leading-relaxed">"{item.prompt}"</p>
-                            <div className="flex gap-3 pt-2">
-                              <button 
-                                onClick={() => {
-                                  setLastResult({ imageUrl: item.image_url, caption: item.caption });
-                                  setActiveTab('geracao');
-                                }}
-                                className="flex-1 py-3 glass hover:bg-white/10 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all"
-                              >
-                                Detalhes
-                              </button>
-                              {item.url && (
+                            <p className="text-sm text-white/60 truncate font-medium">
+                              {item.prompt}
+                            </p>
+                          </div>
+
+                          {/* Actions */}
+                          <div className="flex items-center gap-2">
+                            <button 
+                              onClick={() => {
+                                setLastResult({ imageUrl: item.image_url, caption: item.caption });
+                                setActiveTab('geracao');
+                              }}
+                              className="px-4 py-2 glass hover:bg-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+                            >
+                              Detalhes
+                            </button>
+                            
+                            {item.url && (
+                              <>
                                 <button 
                                   onClick={() => {
                                     setEditingImage(item.url);
@@ -1349,24 +1452,30 @@ Return the image and then the caption text separated by "---CAPTION---".`;
                                     setUserInput('Edite esta imagem: ');
                                     showToast('Modo de edição ativado!');
                                   }}
-                                  className="p-3 glass hover:bg-white/10 rounded-2xl transition-all group/edit"
+                                  className="p-2 glass hover:bg-white/10 rounded-xl transition-all text-white/40 hover:text-brand"
                                   title="Editar"
                                 >
-                                  <Pencil size={16} className="group-hover/edit:text-brand transition-colors" />
+                                  <Pencil size={14} />
                                 </button>
-                              )}
-                              {item.url && (
                                 <a 
                                   href={item.url} 
                                   download 
-                                  className="p-3 glass hover:bg-brand hover:text-white rounded-2xl transition-all group/btn"
                                   target="_blank"
                                   rel="noreferrer"
+                                  className="p-2 glass hover:bg-white/10 rounded-xl transition-all text-white/40 hover:text-emerald-500"
+                                  title="Baixar"
                                 >
-                                  <Download size={16} className="group-hover/btn:scale-110 transition-transform" />
+                                  <Download size={14} />
                                 </a>
-                              )}
-                            </div>
+                              </>
+                            )}
+                          </div>
+
+                          {/* Cost */}
+                          <div className="pl-6 border-l border-white/10 text-right min-w-[100px]">
+                            <span className="text-xs font-black text-brand">
+                              -{item.cost || (item.format === 'texto' ? 5 : 10)} CRÉDITOS
+                            </span>
                           </div>
                         </motion.div>
                       ))}
@@ -1424,16 +1533,27 @@ Return the image and then the caption text separated by "---CAPTION---".`;
                 </div>
 
                 <div className="space-y-3">
-                  <button 
-                    onClick={() => {
-                      navigator.clipboard.writeText(lastResult.caption);
-                      showToast('Legenda copiada!');
-                    }}
-                    className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-xs font-bold border border-white/10 transition-all flex items-center justify-center gap-2"
-                  >
-                    <Copy size={16} />
-                    Copiar Legenda
-                  </button>
+                  {lastResult.caption ? (
+                    <button 
+                      onClick={() => {
+                        navigator.clipboard.writeText(lastResult.caption);
+                        showToast('Legenda copiada!');
+                      }}
+                      className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-xs font-bold border border-white/10 transition-all flex items-center justify-center gap-2"
+                    >
+                      <Copy size={16} />
+                      Copiar Legenda
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={handleGenerateCaption}
+                      disabled={isGenerating}
+                      className="w-full py-4 bg-brand/10 hover:bg-brand/20 text-brand rounded-2xl text-xs font-bold border border-brand/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isGenerating ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                      Gerar Legenda (-2 créditos)
+                    </button>
+                  )}
                   {lastResult.imageUrl && (
                     <a 
                       href={lastResult.imageUrl} 
