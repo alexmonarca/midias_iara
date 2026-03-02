@@ -13,6 +13,7 @@ import {
   Plus, 
   Download, 
   RefreshCw, 
+  HelpCircle,
   Check, 
   AlertCircle, 
   Image as ImageIcon,
@@ -587,9 +588,10 @@ Inclua hashtags relevantes.` }
       if (!file) return;
 
       try {
+        const timestamp = Date.now();
         const path = type === 'logo' 
-          ? `brand-assets/${session.user.id}/logo` 
-          : `brand-assets/${session.user.id}/ref-${index}`;
+          ? `${session.user.id}/logo-${timestamp}` 
+          : `${session.user.id}/ref-${index}-${timestamp}`;
         
         const { error: uploadError } = await supabase.storage
           .from('brand-assets')
@@ -613,6 +615,20 @@ Inclua hashtags relevantes.` }
       }
     };
     input.click();
+  };
+
+  const handleDeleteFile = async (type: 'logo' | 'ref', index?: number) => {
+    if (type === 'logo') {
+      setBrand(prev => ({ ...prev, logo_url: '' }));
+    } else {
+      try {
+        const refs = JSON.parse(brand.reference_images || '[]');
+        refs[index!] = null;
+        setBrand(prev => ({ ...prev, reference_images: JSON.stringify(refs) }));
+      } catch (e) {
+        setBrand(prev => ({ ...prev, reference_images: '[]' }));
+      }
+    }
   };
 
   const loadHistory = async (page = 0) => {
@@ -1249,41 +1265,95 @@ Inclua hashtags relevantes.` }
                         </div>
                         <div className="space-y-3">
                           <p className="text-[10px] font-bold text-white/60 uppercase tracking-widest">Paleta de Cores</p>
-                          <input 
-                            type="text" 
-                            placeholder="#HEX, #HEX"
-                            value={Array.isArray(brand.colors) ? brand.colors.join(', ') : brand.colors}
-                            onChange={(e) => setBrand(prev => ({ ...prev, colors: e.target.value.split(',').map(c => c.trim()) }))}
-                            className="w-full glass rounded-[20px] px-6 py-4 text-sm focus:outline-none focus:border-brand/50 transition-all font-mono"
-                          />
-                          <div className="flex gap-1.5">
-                            {(Array.isArray(brand.colors) ? brand.colors : []).slice(0, 5).map((c, i) => (
-                              <div key={i} className="w-4 h-4 rounded-full border border-white/10 shadow-lg" style={{ backgroundColor: c }} />
+                          <div className="flex flex-wrap gap-3">
+                            {(Array.isArray(brand.colors) ? brand.colors : []).map((c, i) => (
+                              <div key={i} className="group relative">
+                                <input 
+                                  type="color"
+                                  value={c}
+                                  onChange={(e) => {
+                                    const newColors = [...(Array.isArray(brand.colors) ? brand.colors : [])];
+                                    newColors[i] = e.target.value;
+                                    setBrand(prev => ({ ...prev, colors: newColors }));
+                                  }}
+                                  className="w-10 h-10 rounded-xl border border-white/10 cursor-pointer bg-transparent overflow-hidden"
+                                />
+                                <button 
+                                  onClick={() => {
+                                    const newColors = (Array.isArray(brand.colors) ? brand.colors : []).filter((_, idx) => idx !== i);
+                                    setBrand(prev => ({ ...prev, colors: newColors }));
+                                  }}
+                                  className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                  ×
+                                </button>
+                              </div>
                             ))}
+                            {(Array.isArray(brand.colors) ? brand.colors : []).length < 6 && (
+                              <button 
+                                onClick={() => {
+                                  const newColors = [...(Array.isArray(brand.colors) ? brand.colors : []), '#ffffff'];
+                                  setBrand(prev => ({ ...prev, colors: newColors }));
+                                }}
+                                className="w-10 h-10 rounded-xl border border-dashed border-white/20 flex items-center justify-center text-white/20 hover:text-brand hover:border-brand/50 transition-all"
+                              >
+                                <Plus size={16} />
+                              </button>
+                            )}
                           </div>
+                          <p className="text-[9px] text-white/20 uppercase font-bold tracking-widest">Clique na cor para alterar ou no + para adicionar</p>
                         </div>
                       </div>
                     </section>
 
                     <section className="space-y-6">
-                      <div className="flex items-center gap-3">
-                        <div className="w-1.5 h-1.5 bg-brand rounded-full" />
-                        <label className="text-xs font-black uppercase tracking-[0.2em] text-white/40">Moodboard de Estilo</label>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-1.5 h-1.5 bg-brand rounded-full" />
+                          <label className="text-xs font-black uppercase tracking-[0.2em] text-white/40">Referências de estilo</label>
+                        </div>
+                        <div className="group relative">
+                          <HelpCircle size={14} className="text-white/20 cursor-help" />
+                          <div className="absolute right-0 bottom-full mb-2 w-48 p-3 bg-black/90 backdrop-blur-xl border border-white/10 rounded-xl text-[10px] text-white/60 leading-relaxed opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                            Sempre que você quiser usar a imagem de um personagem ou padrão visual, pode inserir aqui as imagens de referência.
+                          </div>
+                        </div>
                       </div>
                       <div className="grid grid-cols-3 gap-4">
-                        {[0, 1, 2].map(i => (
-                          <button 
-                            key={i}
-                            onClick={() => handleFileUpload('ref', i)}
-                            className="aspect-square glass rounded-[24px] flex items-center justify-center hover:bg-white/10 transition-all overflow-hidden group relative"
-                          >
-                            {JSON.parse(brand.reference_images || '[]')[i] ? (
-                              <img src={JSON.parse(brand.reference_images || '[]')[i]} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-120" alt="Ref" />
-                            ) : (
-                              <Plus size={24} className="text-white/20 group-hover:text-brand transition-colors" />
-                            )}
-                          </button>
-                        ))}
+                        {[0, 1, 2].map(i => {
+                          const refs = JSON.parse(brand.reference_images || '[]');
+                          const imageUrl = refs[i];
+                          
+                          return (
+                            <div key={i} className="relative group">
+                              <button 
+                                onClick={() => !imageUrl && handleFileUpload('ref', i)}
+                                className={cn(
+                                  "aspect-square w-full glass rounded-[24px] flex items-center justify-center transition-all overflow-hidden relative",
+                                  !imageUrl && "hover:bg-white/10"
+                                )}
+                              >
+                                {imageUrl ? (
+                                  <img src={imageUrl} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt="Ref" />
+                                ) : (
+                                  <Plus size={24} className="text-white/20 group-hover:text-brand transition-colors" />
+                                )}
+                              </button>
+                              
+                              {imageUrl && (
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteFile('ref', i);
+                                  }}
+                                  className="absolute -top-2 -right-2 w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg z-20 hover:bg-red-600"
+                                >
+                                  <X size={16} />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </section>
                   </div>
