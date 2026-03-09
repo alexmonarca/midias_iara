@@ -37,7 +37,8 @@ import {
   Cpu,
   CreditCard,
   Eye,
-  EyeOff
+  EyeOff,
+  MessageCircle
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -89,17 +90,17 @@ interface ChatMessage {
 
 // --- Components ---
 
-const Toast = ({ message, type = 'success', onClose }: { message: string, type?: 'success' | 'error', onClose: () => void }) => (
+const Toast = ({ message, type = 'success', onClose }: { message: string, type?: 'success' | 'error' | 'warning', onClose: () => void }) => (
   <motion.div 
     initial={{ opacity: 0, y: 20 }}
     animate={{ opacity: 1, y: 0 }}
     exit={{ opacity: 0, y: 20 }}
     className={cn(
       "fixed bottom-6 right-6 px-4 py-3 rounded-lg shadow-xl flex items-center gap-3 z-50",
-      type === 'success' ? "bg-emerald-600" : "bg-red-600"
+      type === 'success' ? "bg-emerald-600" : type === 'warning' ? "bg-orange-600" : "bg-red-600"
     )}
   >
-    {type === 'success' ? <Check size={18} /> : <AlertCircle size={18} />}
+    {type === 'success' ? <Check size={18} /> : type === 'warning' ? <AlertCircle size={18} /> : <AlertCircle size={18} />}
     <span className="text-sm font-medium">{message}</span>
     <button onClick={onClose} className="ml-2 hover:opacity-70"><Plus size={16} className="rotate-45" /></button>
   </motion.div>
@@ -173,7 +174,7 @@ export default function App() {
   };
 
   // UI State
-  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' | 'warning' } | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -203,7 +204,7 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
-  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+  const showToast = (message: string, type: 'success' | 'error' | 'warning' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 4000);
   };
@@ -396,9 +397,6 @@ DO NOT write any caption or text outside the image. Return ONLY the image data.`
       };
 
       if (!isTextOnly) {
-        config.generationConfig = {
-          responseModalities: ["TEXT", "IMAGE"]
-        };
         config.imageConfig = {
           aspectRatio: imageConfigMap[selectedFormat] || '1:1',
           imageSize: "1K"
@@ -523,13 +521,31 @@ DO NOT write any caption or text outside the image. Return ONLY the image data.`
 
     setIsGenerating(true);
     try {
-      const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-      const model = genAI.models.generateContent({
+      // Fetch image and convert to base64
+      const imageResponse = await fetch(lastResult.imageUrl);
+      const imageBlob = await imageResponse.blob();
+      const base64Data = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = reader.result as string;
+          resolve(result.split(',')[1]);
+        };
+        reader.readAsDataURL(imageBlob);
+      });
+
+      const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
         model: "gemini-3.1-pro-preview",
         contents: [
           {
             role: 'user',
             parts: [
+              {
+                inlineData: {
+                  mimeType: "image/png",
+                  data: base64Data
+                }
+              },
               { text: `Gere uma legenda estratégica e criativa em Português Brasileiro para este post. 
 Identidade da marca: ${brand.brand_personality || brand.personality}, Tom: ${brand.tone_of_voice}. 
 Contexto do post: ${userInput || 'Imagem gerada pela IARA'}.
@@ -539,7 +555,6 @@ Inclua hashtags relevantes.` }
         ]
       });
 
-      const response = await model;
       const caption = response.text || '';
 
       // Deduct credits
@@ -1175,20 +1190,47 @@ Inclua hashtags relevantes.` }
                             exit={{ opacity: 0, height: 0 }}
                             className="mb-4 md:mb-6 relative group"
                           >
-                            <div className="flex items-center gap-3 md:gap-4 p-3 md:p-4 glass rounded-2xl md:rounded-3xl border-brand/30 bg-brand/5">
-                              <div className="w-12 h-12 md:w-16 md:h-16 rounded-lg md:rounded-xl overflow-hidden border border-white/10">
-                                <img src={editingImage} alt="Edit target" className="w-full h-full object-cover" />
+                            <div className="flex flex-col gap-3 p-4 glass rounded-2xl md:rounded-3xl border-orange-500/30 bg-orange-500/5">
+                              <div className="flex items-center gap-3 md:gap-4">
+                                <div className="w-12 h-12 md:w-16 md:h-16 rounded-lg md:rounded-xl overflow-hidden border border-white/10">
+                                  <img src={editingImage} alt="Edit target" className="w-full h-full object-cover" />
+                                </div>
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <p className="text-[9px] md:text-[10px] font-black text-orange-400 uppercase tracking-widest flex items-center gap-1">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" />
+                                      Instabilidade Detectada
+                                    </p>
+                                  </div>
+                                  <p className="text-[10px] md:text-xs text-white/80 font-medium">A edição direta pode apresentar falhas no momento.</p>
+                                </div>
+                                <button 
+                                  onClick={() => setEditingImage(null)}
+                                  className="p-2 hover:bg-white/10 rounded-full text-white/40 hover:text-white transition-all"
+                                >
+                                  <Plus size={18} className="rotate-45" />
+                                </button>
                               </div>
-                              <div className="flex-1">
-                                <p className="text-[9px] md:text-[10px] font-black text-brand uppercase tracking-widest">Modo de Edição Ativado</p>
-                                <p className="text-[10px] md:text-xs text-white/60">A IA usará esta imagem como base.</p>
+                              
+                              <div className="pt-3 border-t border-white/5 space-y-2">
+                                <p className="text-[10px] text-white/60 leading-relaxed">
+                                  <strong className="text-white">Dica para melhores resultados:</strong> Remova as imagens em referência de estilo e solicite no chat para editar a imagem de referência.
+                                </p>
+                                <div className="p-3 bg-brand/10 rounded-xl border border-brand/20">
+                                  <p className="text-[10px] text-brand-light leading-relaxed mb-2">
+                                    <strong>Precisa de perfeição?</strong> Contrate um de nossos designers para melhorar a arte pra você. O custo é de apenas <span className="font-bold text-white">R$ 27 por arte</span>.
+                                  </p>
+                                  <a 
+                                    href="https://wa.me/5555996079863?text=Quero%20editar%20uma%20imagem%20e%20pagar%20apenas%20R%2427.%20"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1.5 text-[10px] font-bold text-white bg-green-600 hover:bg-green-700 px-3 py-1.5 rounded-lg transition-colors"
+                                  >
+                                    <MessageCircle size={12} />
+                                    Contratar via WhatsApp
+                                  </a>
+                                </div>
                               </div>
-                              <button 
-                                onClick={() => setEditingImage(null)}
-                                className="p-2 hover:bg-white/10 rounded-full text-white/40 hover:text-white transition-all"
-                              >
-                                <Plus size={18} className="rotate-45" />
-                              </button>
                             </div>
                           </motion.div>
                         )}
@@ -1262,6 +1304,15 @@ Inclua hashtags relevantes.` }
                               </>
                             )}
                           </button>
+                          <a 
+                            href="https://agencia.monarcahub.com/construcao-de-logo-identidade-visual/" 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="flex items-center justify-center gap-2 py-3 w-full glass rounded-[18px] text-[10px] font-bold text-brand uppercase tracking-widest hover:bg-brand/10 transition-all border border-brand/20 mt-2"
+                          >
+                            <Sparkles size={12} />
+                            Criar nova logo
+                          </a>
                         </div>
                         <div className="space-y-3">
                           <p className="text-[10px] font-bold text-white/60 uppercase tracking-widest">Paleta de Cores</p>
@@ -1520,7 +1571,7 @@ Inclua hashtags relevantes.` }
                                     setEditingImage(item.url);
                                     setActiveTab('geracao');
                                     setUserInput('Edite esta imagem: ');
-                                    showToast('Modo de edição ativado!');
+                                    showToast('Modo de edição ativado (Instabilidade detectada)', 'warning');
                                   }}
                                   className="p-2 glass hover:bg-white/10 rounded-xl transition-all text-white/40 hover:text-brand"
                                   title="Editar"
@@ -1643,7 +1694,7 @@ Inclua hashtags relevantes.` }
                         setLastResult(null);
                         setActiveTab('geracao');
                         setUserInput('Edite esta imagem: ');
-                        showToast('Modo de edição ativado! Descreva as mudanças.');
+                        showToast('Modo de edição ativado (Instabilidade detectada)', 'warning');
                       }}
                       className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-xs font-bold border border-white/10 transition-all flex items-center justify-center gap-2 text-white/60 hover:text-white"
                     >
