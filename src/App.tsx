@@ -27,6 +27,7 @@ import {
   Instagram,
   Loader2,
   Sparkles,
+  Search,
   Zap,
   Smartphone,
   ChevronRight,
@@ -106,6 +107,160 @@ const Toast = ({ message, type = 'success', onClose }: { message: string, type?:
   </motion.div>
 );
 
+// --- Components ---
+const ImageSelectionModal = ({ 
+  isOpen, 
+  onClose, 
+  candidates, 
+  isSearching,
+  onSelectLogo,
+  onAddReference,
+  setSearchCandidates,
+  setIsSearchingCandidates,
+  handleAISearchFallback,
+  showToast
+}: { 
+  isOpen: boolean, 
+  onClose: () => void, 
+  candidates: string[], 
+  isSearching: boolean,
+  onSelectLogo: (url: string) => void,
+  onAddReference: (url: string) => void,
+  setSearchCandidates: React.Dispatch<React.SetStateAction<string[]>>,
+  setIsSearchingCandidates: React.Dispatch<React.SetStateAction<boolean>>,
+  handleAISearchFallback: (query: string) => Promise<any>,
+  showToast: (msg: string, type?: any) => void
+}) => {
+  const [manualSearch, setManualSearch] = useState('');
+
+  if (!isOpen) return null;
+
+  const handleManualSearch = async () => {
+    if (!manualSearch.trim()) return;
+    setIsSearchingCandidates(true);
+    showToast(`Buscando por "${manualSearch}"...`, 'warning');
+    const aiData = await handleAISearchFallback(manualSearch);
+    if (aiData && aiData.candidates) {
+      setSearchCandidates(prev => {
+        const combined = [...prev, ...aiData.candidates];
+        return Array.from(new Set(combined));
+      });
+    }
+    setIsSearchingCandidates(false);
+    setManualSearch('');
+  };
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6">
+      <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onClose}
+        className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+      />
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="relative w-full max-w-4xl bg-[#0a0a0a] border border-white/10 rounded-[32px] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+      >
+        <div className="p-6 border-bottom border-white/5 flex flex-col sm:flex-row items-center justify-between bg-white/5 gap-4">
+          <div>
+            <h2 className="text-xl font-bold tracking-tight">Sugestões de Imagens</h2>
+            <p className="text-xs text-white/40 uppercase tracking-widest font-bold mt-1">Selecione o que deseja usar na sua marca</p>
+          </div>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="relative flex-1 sm:w-64">
+              <input 
+                type="text"
+                placeholder="Pesquisar no Google..."
+                value={manualSearch}
+                onChange={(e) => setManualSearch(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleManualSearch()}
+                className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2 text-xs font-medium focus:outline-none focus:border-brand/50 transition-all placeholder:text-white/20"
+              />
+              <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20" />
+            </div>
+            <button 
+              onClick={onClose}
+              className="w-10 h-10 glass rounded-full flex items-center justify-center hover:bg-white/10 transition-all shrink-0"
+            >
+              <Plus size={20} className="rotate-45" />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+          {candidates.length === 0 && isSearching ? (
+            <div className="flex flex-col items-center justify-center py-20 gap-4">
+              <Loader2 size={40} className="text-brand animate-spin" />
+              <p className="text-sm text-white/40 animate-pulse">Buscando imagens na web...</p>
+            </div>
+          ) : candidates.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 gap-4 text-white/20">
+              <Search size={40} />
+              <p className="text-sm">Nenhuma imagem encontrada ainda.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+              {candidates.map((url, i) => (
+                <div key={i} className="group relative aspect-square glass rounded-2xl overflow-hidden border border-white/5 hover:border-brand/50 transition-all">
+                  <img 
+                    src={`/api/proxy-image?url=${encodeURIComponent(url)}`} 
+                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                    alt={`Candidate ${i}`}
+                    onError={(e) => {
+                      const target = e.currentTarget;
+                      if (target.src.includes('/api/proxy-image?url=')) {
+                        target.src = url; // Try direct if proxy fails
+                      } else {
+                        target.parentElement?.classList.add('hidden'); // Hide if both fail
+                      }
+                    }}
+                  />
+                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2 p-2">
+                    <button 
+                      onClick={() => onSelectLogo(url)}
+                      className="w-full py-2 bg-brand text-white text-[10px] font-bold uppercase tracking-widest rounded-lg hover:scale-105 transition-all"
+                    >
+                      Usar como Logo
+                    </button>
+                    <button 
+                      onClick={() => onAddReference(url)}
+                      className="w-full py-2 bg-white/10 text-white text-[10px] font-bold uppercase tracking-widest rounded-lg hover:bg-white/20 transition-all"
+                    >
+                      Add Referência
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {isSearching && candidates.length > 0 && (
+          <div className="px-6 py-3 bg-brand/10 border-t border-white/5 flex items-center gap-3">
+            <Loader2 size={14} className="text-brand animate-spin" />
+            <span className="text-[10px] font-bold text-brand uppercase tracking-widest animate-pulse">
+              A IA ainda está procurando mais imagens...
+            </span>
+          </div>
+        )}
+
+        <div className="p-6 border-t border-white/5 bg-white/5 flex justify-end">
+          <button 
+            onClick={onClose}
+            className="px-8 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl text-xs font-bold transition-all"
+          >
+            Concluir
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
 export default function App() {
   // Auth State
   const [session, setSession] = useState<any>(null);
@@ -145,6 +300,9 @@ export default function App() {
   const [showPassword, setShowPassword] = useState(false);
   const [instaHandle, setInstaHandle] = useState('');
   const [isImportingInsta, setIsImportingInsta] = useState(false);
+  const [searchCandidates, setSearchCandidates] = useState<string[]>([]);
+  const [isSelectionModalOpen, setIsSelectionModalOpen] = useState(false);
+  const [isSearchingCandidates, setIsSearchingCandidates] = useState(false);
 
   // History State
   const [historyItems, setHistoryItems] = useState<any[]>([]);
@@ -267,6 +425,10 @@ export default function App() {
     }
 
     setIsImportingInsta(true);
+    setSearchCandidates([]);
+    setIsSelectionModalOpen(true);
+    setIsSearchingCandidates(true);
+    
     try {
       // Step 1: Try the standard scraper
       const response = await fetch('/api/scrape-instagram', {
@@ -275,101 +437,95 @@ export default function App() {
         body: JSON.stringify({ handle: instaHandle }),
       });
 
-      let data;
-      if (!response.ok) {
-        console.log("Scraper failed, falling back to AI Search...");
-        showToast('Instagram bloqueou o acesso. Iniciando busca inteligente (IA)...', 'warning');
-        // Step 2: Fallback to Gemini Search if scraper fails
-        data = await handleAISearchFallback(instaHandle);
-      } else {
-        data = await response.json();
+      let initialCandidates: string[] = [];
+      if (response.ok) {
+        const data = await response.json();
+        if (data.logo) initialCandidates.push(data.logo);
+        if (data.references) initialCandidates = [...initialCandidates, ...data.references];
       }
       
-      if (!data || (!data.logo && (!data.references || data.references.length === 0))) {
-        throw new Error('Não foi possível encontrar dados para este perfil.');
-      }
-
-      // Update brand settings
-      setBrand(prev => {
-        const currentRefs = JSON.parse(prev.reference_images || '[]');
-        const proxiedNewRefs = (data.references || []).map((url: string) => 
-          url.startsWith('http') ? `/api/proxy-image?url=${encodeURIComponent(url)}` : url
-        );
-        const newRefs = [...new Set([...proxiedNewRefs, ...currentRefs])].slice(0, 3);
-        
-        return {
-          ...prev,
-          logo_url: data.logo ? (data.logo.startsWith('http') ? `/api/proxy-image?url=${encodeURIComponent(data.logo)}` : data.logo) : prev.logo_url,
-          reference_images: JSON.stringify(newRefs)
-        };
+      setSearchCandidates(prev => {
+        const combined = [...prev, ...initialCandidates];
+        return Array.from(new Set(combined));
       });
 
-      // Try to extract colors if logo exists
-      if (data.logo) {
-        try {
-          const img = new Image();
-          img.crossOrigin = "Anonymous";
-          img.src = data.logo.startsWith('http') ? `/api/proxy-image?url=${encodeURIComponent(data.logo)}` : data.logo;
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            if (!ctx) return;
-            
-            canvas.width = img.width;
-            canvas.height = img.height;
-            ctx.drawImage(img, 0, 0);
-            
-            const points = [[0.5, 0.5], [0.2, 0.2], [0.8, 0.8], [0.2, 0.8], [0.8, 0.2]];
-            const extractedColors = points.map(([px, py]) => {
-              const x = Math.floor(px * canvas.width);
-              const y = Math.floor(py * canvas.height);
-              const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
-              return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
-            });
-            
-            const uniqueColors = [...new Set(extractedColors)].slice(0, 3);
-            setBrand(prev => ({
-              ...prev,
-              colors: [...new Set([...uniqueColors, ...prev.colors])].slice(0, 6)
-            }));
-          };
-        } catch (e) {
-          console.warn('Could not extract colors from logo:', e);
-        }
+      // Step 2: Deep Search with AI
+      showToast('Buscando mais sugestões com IA...', 'warning');
+      const aiData = await handleAISearchFallback(instaHandle);
+      
+      if (aiData && aiData.candidates) {
+        setSearchCandidates(prev => {
+          const combined = [...prev, ...aiData.candidates];
+          return Array.from(new Set(combined));
+        });
       }
 
-      showToast('Identidade visual importada com sucesso!');
-      setInstaHandle('');
+      if (initialCandidates.length === 0 && (!aiData || !aiData.candidates || aiData.candidates.length === 0)) {
+        showToast('Nenhuma imagem encontrada. Verifique o @.', 'error');
+      }
+
     } catch (error: any) {
-      console.error('Import error:', error);
-      showToast(error.message, 'error');
+      console.error("Import error:", error);
+      showToast('Erro ao buscar imagens.', 'error');
     } finally {
       setIsImportingInsta(false);
+      setIsSearchingCandidates(false);
     }
   };
 
+  const extractColorsFromLogo = (logoUrl: string) => {
+    try {
+      const img = new Image();
+      img.crossOrigin = "Anonymous";
+      img.src = logoUrl.startsWith('http') ? `/api/proxy-image?url=${encodeURIComponent(logoUrl)}` : logoUrl;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+        
+        const points = [[0.5, 0.5], [0.2, 0.2], [0.8, 0.8], [0.2, 0.8], [0.8, 0.2]];
+        const extractedColors = points.map(([px, py]) => {
+          const x = Math.floor(px * canvas.width);
+          const y = Math.floor(py * canvas.height);
+          const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
+          return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+        });
+        
+        const uniqueColors = [...new Set(extractedColors)].slice(0, 3);
+        setBrand(prev => ({
+          ...prev,
+          colors: [...new Set([...uniqueColors, ...prev.colors])].slice(0, 6)
+        }));
+      };
+    } catch (e) {
+      console.warn('Could not extract colors from logo:', e);
+    }
+  };
   const handleAISearchFallback = async (handle: string) => {
     try {
-      console.log(`[AI Search] Starting deep search for: ${handle}`);
       const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
       const model = "gemini-3-flash-preview";
       
-      const prompt = `Você é um especialista em branding. Preciso que você encontre a identidade visual da marca/perfil do Instagram "${handle}".
+      const prompt = `Você é um especialista em branding e pesquisa visual. Preciso que você encontre o máximo de imagens de alta qualidade relacionadas à marca/perfil do Instagram "${handle}".
       
       TAREFAS:
-      1. Encontre a URL direta da imagem de perfil (avatar) do Instagram ou o logo oficial no site da marca.
-      2. Encontre 3 URLs diretas de imagens que representem o estilo visual da marca (posts do Instagram, banners do site, etc).
+      1. Encontre a URL direta do logo oficial ou imagem de perfil.
+      2. Encontre URLs de posts, banners, fotos de produtos ou qualquer elemento visual que defina a identidade da marca.
       
       REGRAS:
-      - As URLs devem ser links DIRETOS para imagens (terminando em .jpg, .png, .webp ou similares).
-      - Priorize links estáveis (evite links temporários do Instagram se possível, use do site oficial ou CDN).
-      - Se não encontrar o logo exato, use a imagem de perfil mais nítida que encontrar.
+      - Procure no Instagram, site oficial, LinkedIn, Facebook e Google Images.
+      - As URLs devem ser links DIRETOS para imagens (.jpg, .png, .webp).
+      - Tente retornar pelo menos 10 a 15 URLs únicas e relevantes.
       
       Retorne APENAS um JSON no formato:
       {
-        "logo": "URL_DIRETA",
-        "references": ["URL1", "URL2", "URL3"],
-        "brand_name": "Nome da Marca"
+        "candidates": ["URL1", "URL2", "URL3", ...],
+        "brand_name": "Nome da Marca",
+        "suggested_logo": "URL_DO_LOGO_MAIS_PROVAVEL"
       }`;
 
       const result = await ai.models.generateContent({
@@ -387,9 +543,8 @@ export default function App() {
       if (!text) return null;
       const parsed = JSON.parse(text.trim());
       
-      // Basic validation
-      if (!parsed.logo && (!parsed.references || parsed.references.length === 0)) {
-        console.warn("[AI Search] AI returned empty results");
+      if (!parsed.candidates || parsed.candidates.length === 0) {
+        console.warn("[AI Search] AI returned no candidates");
         return null;
       }
       
@@ -1203,7 +1358,34 @@ Inclua hashtags relevantes.` }
             </AnimatePresence>
 
             <div className="absolute inset-0 bg-gradient-to-br from-brand/5 via-transparent to-transparent pointer-events-none" />
-            <AnimatePresence mode="wait">
+            <ImageSelectionModal 
+        isOpen={isSelectionModalOpen}
+        onClose={() => setIsSelectionModalOpen(false)}
+        candidates={searchCandidates}
+        isSearching={isSearchingCandidates}
+        setSearchCandidates={setSearchCandidates}
+        setIsSearchingCandidates={setIsSearchingCandidates}
+        handleAISearchFallback={handleAISearchFallback}
+        showToast={showToast}
+        onSelectLogo={(url) => {
+          const proxiedUrl = `/api/proxy-image?url=${encodeURIComponent(url)}`;
+          setBrand(prev => ({ ...prev, logo_url: proxiedUrl }));
+          extractColorsFromLogo(url);
+          showToast('Logo selecionado!', 'success');
+        }}
+        onAddReference={(url) => {
+          const proxiedUrl = `/api/proxy-image?url=${encodeURIComponent(url)}`;
+          setBrand(prev => {
+            const currentRefs = JSON.parse(prev.reference_images || '[]');
+            if (currentRefs.includes(proxiedUrl)) return prev;
+            const newRefs = [...currentRefs, proxiedUrl].slice(0, 6);
+            return { ...prev, reference_images: JSON.stringify(newRefs) };
+          });
+          showToast('Referência adicionada!', 'success');
+        }}
+      />
+
+      <AnimatePresence mode="wait">
               {activeTab === 'geracao' && (
                 <motion.div 
                   key="geracao"
