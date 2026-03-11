@@ -143,6 +143,8 @@ export default function App() {
   const [editingImage, setEditingImage] = useState<string | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [instaHandle, setInstaHandle] = useState('');
+  const [isImportingInsta, setIsImportingInsta] = useState(false);
 
   // History State
   const [historyItems, setHistoryItems] = useState<any[]>([]);
@@ -255,6 +257,126 @@ export default function App() {
       showToast(error.message, 'error');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleImportInstagram = async () => {
+    if (!instaHandle) {
+      showToast('Por favor, insira o @ do Instagram', 'error');
+      return;
+    }
+
+    setIsImportingInsta(true);
+    try {
+      // Step 1: Try the standard scraper
+      const response = await fetch('/api/scrape-instagram', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handle: instaHandle }),
+      });
+
+      let data;
+      if (!response.ok) {
+        console.log("Scraper failed, falling back to AI Search...");
+        // Step 2: Fallback to Gemini Search if scraper fails
+        data = await handleAISearchFallback(instaHandle);
+      } else {
+        data = await response.json();
+      }
+      
+      if (!data || (!data.logo && (!data.references || data.references.length === 0))) {
+        throw new Error('Não foi possível encontrar dados para este perfil.');
+      }
+
+      // Update brand settings
+      setBrand(prev => {
+        const currentRefs = JSON.parse(prev.reference_images || '[]');
+        const proxiedNewRefs = (data.references || []).map((url: string) => 
+          url.startsWith('http') ? `/api/proxy-image?url=${encodeURIComponent(url)}` : url
+        );
+        const newRefs = [...new Set([...proxiedNewRefs, ...currentRefs])].slice(0, 3);
+        
+        return {
+          ...prev,
+          logo_url: data.logo ? (data.logo.startsWith('http') ? `/api/proxy-image?url=${encodeURIComponent(data.logo)}` : data.logo) : prev.logo_url,
+          reference_images: JSON.stringify(newRefs)
+        };
+      });
+
+      // Try to extract colors if logo exists
+      if (data.logo) {
+        try {
+          const img = new Image();
+          img.crossOrigin = "Anonymous";
+          img.src = data.logo.startsWith('http') ? `/api/proxy-image?url=${encodeURIComponent(data.logo)}` : data.logo;
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            
+            canvas.width = img.width;
+            canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
+            
+            const points = [[0.5, 0.5], [0.2, 0.2], [0.8, 0.8], [0.2, 0.8], [0.8, 0.2]];
+            const extractedColors = points.map(([px, py]) => {
+              const x = Math.floor(px * canvas.width);
+              const y = Math.floor(py * canvas.height);
+              const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
+              return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+            });
+            
+            const uniqueColors = [...new Set(extractedColors)].slice(0, 3);
+            setBrand(prev => ({
+              ...prev,
+              colors: [...new Set([...uniqueColors, ...prev.colors])].slice(0, 6)
+            }));
+          };
+        } catch (e) {
+          console.warn('Could not extract colors from logo:', e);
+        }
+      }
+
+      showToast('Identidade visual importada com sucesso!');
+      setInstaHandle('');
+    } catch (error: any) {
+      console.error('Import error:', error);
+      showToast(error.message, 'error');
+    } finally {
+      setIsImportingInsta(false);
+    }
+  };
+
+  const handleAISearchFallback = async (handle: string) => {
+    try {
+      const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+      const model = "gemini-3-flash-preview";
+      
+      const prompt = `Encontre o link direto da imagem do logo oficial e 3 imagens de referência de posts ou identidade visual da marca/perfil "${handle}". 
+      Pesquise no Instagram, site oficial e Google Images.
+      Retorne APENAS um JSON válido no formato:
+      {
+        "logo": "URL_DIRETA_DA_IMAGEM",
+        "references": ["URL1", "URL2", "URL3"]
+      }
+      Certifique-se de que as URLs sejam links diretos para arquivos de imagem (jpg, png, webp).`;
+
+      const result = await ai.models.generateContent({
+        model,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: {
+          tools: [{ googleSearch: {} }],
+          responseMimeType: "application/json"
+        }
+      });
+
+      const text = result.text;
+      if (!text) return null;
+      
+      return JSON.parse(text.trim());
+    } catch (e) {
+      console.error("AI Search Fallback failed:", e);
+      return null;
     }
   };
 
@@ -1279,6 +1401,50 @@ Inclua hashtags relevantes.` }
                     </div>
                     <div className="w-12 h-12 glass rounded-2xl flex items-center justify-center text-brand neon-border">
                       <Palette size={24} />
+                    </div>
+                  </div>
+
+                  {/* Instagram Import Box */}
+                  <div className="glass rounded-[24px] p-4 border border-white/5 relative overflow-hidden group">
+                    <div className="absolute top-0 right-0 w-64 h-64 bg-brand/5 blur-[100px] -mr-32 -mt-32 rounded-full" />
+                    <div className="relative z-10 flex flex-col md:flex-row items-center gap-4">
+                      <div className="w-10 h-10 bg-gradient-to-br from-[#f09433] via-[#dc2743] to-[#bc1888] rounded-lg flex items-center justify-center text-white shadow-lg shadow-brand/20">
+                        <Instagram size={20} />
+                      </div>
+                      <div className="flex-1 space-y-0.5 text-center md:text-left">
+                        <h3 className="text-sm font-bold tracking-tight">Importar do Instagram</h3>
+                        <div className="flex flex-col gap-1">
+                          <p className="text-[9px] text-white/40 uppercase tracking-widest font-bold">Puxe logo e referências automaticamente</p>
+                          <div className="flex items-center justify-center md:justify-start gap-1.5 text-[8px] text-orange-400/60 font-medium">
+                            <AlertCircle size={10} />
+                            <span>BETA - Essa opção pode demorar e o resultado gerado pode ser insatisfatório.</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="w-full md:w-auto flex flex-col sm:flex-row items-center gap-3">
+                        <div className="relative w-full sm:w-56">
+                          <input 
+                            type="text"
+                            placeholder="@seu.instagram"
+                            value={instaHandle}
+                            onChange={(e) => setInstaHandle(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleImportInstagram()}
+                            className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2.5 text-xs font-medium focus:outline-none focus:border-brand/50 transition-all placeholder:text-white/20"
+                          />
+                        </div>
+                        <button 
+                          onClick={handleImportInstagram}
+                          disabled={isImportingInsta}
+                          className="w-full sm:w-auto px-6 py-2.5 btn-gradient text-white rounded-xl text-xs font-bold shadow-lg shadow-brand/20 hover:scale-105 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:hover:scale-100"
+                        >
+                          {isImportingInsta ? (
+                            <Loader2 size={14} className="animate-spin" />
+                          ) : (
+                            <RefreshCw size={14} />
+                          )}
+                          {isImportingInsta ? 'Importando...' : 'Importar'}
+                        </button>
+                      </div>
                     </div>
                   </div>
                   
