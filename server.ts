@@ -50,14 +50,22 @@ async function startServer() {
             "Accept-Language": "en-US,en;q=0.9",
             "Referer": "https://www.google.com/"
           },
-          timeout: 5000
+          timeout: 5000,
+          validateStatus: (status) => status < 500 // Don't throw on 403/404
         });
-        const $ = cheerio.load(instaRes.data);
-        logo = $('meta[property="og:image"]').attr('content');
-        console.log(`[Scraper] Instagram direct logo found: ${!!logo}`);
+        
+        if (instaRes.status === 200) {
+          const $ = cheerio.load(instaRes.data);
+          logo = $('meta[property="og:image"]').attr('content');
+          console.log(`[Scraper] Instagram direct logo found: ${!!logo}`);
+        } else {
+          console.log(`[Scraper] Instagram direct returned status: ${instaRes.status}`);
+        }
       } catch (e: any) {
         console.log(`[Scraper] Instagram direct failed: ${e.message}`);
       }
+
+      await new Promise(r => setTimeout(r, 500)); // Small delay
 
       // Strategy 2: Picuki
       if (!logo || references.length < 3) {
@@ -68,19 +76,27 @@ async function startServer() {
               "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
               "Referer": "https://www.picuki.com/"
             },
-            timeout: 5000
+            timeout: 5000,
+            validateStatus: (status) => status < 500
           });
-          const $pic = cheerio.load(picukiRes.data);
-          if (!logo) logo = $pic('.profile-avatar img').attr('src');
-          $pic('.post-image img').each((i, el) => {
-            const src = $pic(el).attr('src');
-            if (src && !references.includes(src) && references.length < 6) references.push(src);
-          });
-          console.log(`[Scraper] Picuki results - Logo: ${!!logo}, Refs: ${references.length}`);
+          
+          if (picukiRes.status === 200) {
+            const $pic = cheerio.load(picukiRes.data);
+            if (!logo) logo = $pic('.profile-avatar img').attr('src');
+            $pic('.post-image img').each((i, el) => {
+              const src = $pic(el).attr('src');
+              if (src && !references.includes(src) && references.length < 6) references.push(src);
+            });
+            console.log(`[Scraper] Picuki results - Logo: ${!!logo}, Refs: ${references.length}`);
+          } else {
+            console.log(`[Scraper] Picuki returned status: ${picukiRes.status}`);
+          }
         } catch (e: any) {
           console.log(`[Scraper] Picuki failed: ${e.message}`);
         }
       }
+
+      await new Promise(r => setTimeout(r, 500));
 
       // Strategy 3: Imginn
       if (!logo || references.length < 3) {
@@ -91,15 +107,21 @@ async function startServer() {
               "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
               "Referer": "https://imginn.com/"
             },
-            timeout: 5000
+            timeout: 5000,
+            validateStatus: (status) => status < 500
           });
-          const $imginn = cheerio.load(imginnRes.data);
-          if (!logo) logo = $imginn('.info .img img').attr('src');
-          $imginn('.items .item img').each((i, el) => {
-            const src = $imginn(el).attr('data-src') || $imginn(el).attr('src');
-            if (src && !references.includes(src) && references.length < 6) references.push(src);
-          });
-          console.log(`[Scraper] Imginn results - Logo: ${!!logo}, Refs: ${references.length}`);
+          
+          if (imginnRes.status === 200) {
+            const $imginn = cheerio.load(imginnRes.data);
+            if (!logo) logo = $imginn('.info .img img').attr('src');
+            $imginn('.items .item img').each((i, el) => {
+              const src = $imginn(el).attr('data-src') || $imginn(el).attr('src');
+              if (src && !references.includes(src) && references.length < 6) references.push(src);
+            });
+            console.log(`[Scraper] Imginn results - Logo: ${!!logo}, Refs: ${references.length}`);
+          } else {
+            console.log(`[Scraper] Imginn returned status: ${imginnRes.status}`);
+          }
         } catch (e: any) {
           console.log(`[Scraper] Imginn failed: ${e.message}`);
         }
@@ -145,20 +167,31 @@ async function startServer() {
 
   // Proxy route for images to avoid CORS issues
   app.get("/api/proxy-image", async (req, res) => {
-    const { url } = req.query;
-    if (!url) return res.status(400).send("URL is required");
+    const imageUrl = req.query.url;
+    console.log(`[Proxy] Requesting URL: ${imageUrl}`);
+    
+    if (!imageUrl || typeof imageUrl !== 'string') {
+      return res.status(400).send("A valid URL string is required");
+    }
+
     try {
-      const response = await axios.get(url as string, { 
+      const response = await axios.get(imageUrl, { 
         responseType: "arraybuffer",
         headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
-        }
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+          "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+          "Referer": new URL(imageUrl).origin
+        },
+        timeout: 15000
       });
-      res.set("Content-Type", response.headers["content-type"] || "image/jpeg");
+      
+      const contentType = response.headers["content-type"];
+      if (contentType) res.set("Content-Type", contentType);
+      res.set("Cache-Control", "public, max-age=86400"); // Cache for 24h
       res.send(response.data);
-    } catch (e) {
-      console.error("Proxy error:", e);
-      res.status(500).send("Failed to proxy image");
+    } catch (e: any) {
+      console.error(`[Proxy] Error for ${imageUrl}:`, e.message);
+      res.status(500).send(`Failed to proxy image: ${e.message}`);
     }
   });
 
@@ -179,6 +212,8 @@ async function startServer() {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+
+  return app;
 }
 
-startServer();
+export const appPromise = startServer();

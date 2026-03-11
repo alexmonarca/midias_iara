@@ -278,6 +278,7 @@ export default function App() {
       let data;
       if (!response.ok) {
         console.log("Scraper failed, falling back to AI Search...");
+        showToast('Instagram bloqueou o acesso. Iniciando busca inteligente (IA)...', 'warning');
         // Step 2: Fallback to Gemini Search if scraper fails
         data = await handleAISearchFallback(instaHandle);
       } else {
@@ -349,17 +350,27 @@ export default function App() {
 
   const handleAISearchFallback = async (handle: string) => {
     try {
+      console.log(`[AI Search] Starting deep search for: ${handle}`);
       const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
       const model = "gemini-3-flash-preview";
       
-      const prompt = `Encontre o link direto da imagem do logo oficial e 3 imagens de referência de posts ou identidade visual da marca/perfil "${handle}". 
-      Pesquise no Instagram, site oficial e Google Images.
-      Retorne APENAS um JSON válido no formato:
+      const prompt = `Você é um especialista em branding. Preciso que você encontre a identidade visual da marca/perfil do Instagram "${handle}".
+      
+      TAREFAS:
+      1. Encontre a URL direta da imagem de perfil (avatar) do Instagram ou o logo oficial no site da marca.
+      2. Encontre 3 URLs diretas de imagens que representem o estilo visual da marca (posts do Instagram, banners do site, etc).
+      
+      REGRAS:
+      - As URLs devem ser links DIRETOS para imagens (terminando em .jpg, .png, .webp ou similares).
+      - Priorize links estáveis (evite links temporários do Instagram se possível, use do site oficial ou CDN).
+      - Se não encontrar o logo exato, use a imagem de perfil mais nítida que encontrar.
+      
+      Retorne APENAS um JSON no formato:
       {
-        "logo": "URL_DIRETA_DA_IMAGEM",
-        "references": ["URL1", "URL2", "URL3"]
-      }
-      Certifique-se de que as URLs sejam links diretos para arquivos de imagem (jpg, png, webp).`;
+        "logo": "URL_DIRETA",
+        "references": ["URL1", "URL2", "URL3"],
+        "brand_name": "Nome da Marca"
+      }`;
 
       const result = await ai.models.generateContent({
         model,
@@ -371,11 +382,20 @@ export default function App() {
       });
 
       const text = result.text;
-      if (!text) return null;
+      console.log(`[AI Search] Response received:`, text);
       
-      return JSON.parse(text.trim());
+      if (!text) return null;
+      const parsed = JSON.parse(text.trim());
+      
+      // Basic validation
+      if (!parsed.logo && (!parsed.references || parsed.references.length === 0)) {
+        console.warn("[AI Search] AI returned empty results");
+        return null;
+      }
+      
+      return parsed;
     } catch (e) {
-      console.error("AI Search Fallback failed:", e);
+      console.error("[AI Search] Fallback failed:", e);
       return null;
     }
   };
@@ -1405,7 +1425,7 @@ Inclua hashtags relevantes.` }
                   </div>
 
                   {/* Instagram Import Box */}
-                  <div className="glass rounded-[24px] p-4 border border-white/5 relative overflow-hidden group">
+                  <div className="glass rounded-[24px] p-4 border border-white/5 relative group">
                     <div className="absolute top-0 right-0 w-64 h-64 bg-brand/5 blur-[100px] -mr-32 -mt-32 rounded-full" />
                     <div className="relative z-10 flex flex-col md:flex-row items-center gap-4">
                       <div className="w-10 h-10 bg-gradient-to-br from-[#f09433] via-[#dc2743] to-[#bc1888] rounded-lg flex items-center justify-center text-white shadow-lg shadow-brand/20">
@@ -1415,9 +1435,25 @@ Inclua hashtags relevantes.` }
                         <h3 className="text-sm font-bold tracking-tight">Importar do Instagram</h3>
                         <div className="flex flex-col gap-1">
                           <p className="text-[9px] text-white/40 uppercase tracking-widest font-bold">Puxe logo e referências automaticamente</p>
-                          <div className="flex items-center justify-center md:justify-start gap-1.5 text-[8px] text-orange-400/60 font-medium">
-                            <AlertCircle size={10} />
-                            <span>BETA - Essa opção pode demorar e o resultado gerado pode ser insatisfatório.</span>
+                          <div className="relative group/tooltip inline-block">
+                            <div 
+                              className="flex items-center justify-center md:justify-start gap-2 text-[11px] text-orange-400 font-bold cursor-help bg-orange-400/10 px-2 py-0.5 rounded-full"
+                              onClick={(e) => {
+                                const tooltip = e.currentTarget.nextElementSibling;
+                                if (tooltip) tooltip.classList.toggle('visible');
+                                if (tooltip) tooltip.classList.toggle('opacity-100');
+                              }}
+                            >
+                              <HelpCircle size={14} />
+                              <span>Beta</span>
+                            </div>
+                            <div className="absolute bottom-full left-0 md:left-0 mb-3 w-72 p-4 bg-black/95 border border-white/10 rounded-2xl text-xs text-white/90 opacity-0 invisible group-hover/tooltip:opacity-100 group-hover/tooltip:visible transition-all z-[100] shadow-2xl backdrop-blur-2xl pointer-events-none ring-1 ring-white/20">
+                              <div className="font-bold text-orange-400 mb-1 flex items-center gap-2">
+                                <Sparkles size={12} />
+                                Busca Inteligente (Beta)
+                              </div>
+                              Essa opção utiliza inteligência artificial para buscar dados na web quando o Instagram bloqueia o acesso. Pode demorar alguns segundos e os links podem expirar.
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1462,7 +1498,18 @@ Inclua hashtags relevantes.` }
                             className="w-full aspect-video glass rounded-[24px] flex flex-col items-center justify-center gap-3 hover:bg-white/10 transition-all overflow-hidden group relative"
                           >
                             {brand.logo_url ? (
-                              <img src={brand.logo_url} className="w-full h-full object-contain p-6 transition-transform duration-500 group-hover:scale-110" alt="Logo" />
+                              <img 
+                                src={brand.logo_url} 
+                                className="w-full h-full object-contain p-6 transition-transform duration-500 group-hover:scale-110" 
+                                alt="Logo" 
+                                onError={(e) => {
+                                  const target = e.currentTarget;
+                                  if (target.src.includes('/api/proxy-image?url=')) {
+                                    const originalUrl = decodeURIComponent(target.src.split('url=')[1]);
+                                    target.src = originalUrl;
+                                  }
+                                }}
+                              />
                             ) : (
                               <>
                                 <Upload size={24} className="text-white/20 group-hover:text-brand transition-colors" />
@@ -1551,7 +1598,18 @@ Inclua hashtags relevantes.` }
                                 )}
                               >
                                 {imageUrl ? (
-                                  <img src={imageUrl} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt="Ref" />
+                                  <img 
+                                    src={imageUrl} 
+                                    className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" 
+                                    alt="Ref" 
+                                    onError={(e) => {
+                                      const target = e.currentTarget;
+                                      if (target.src.includes('/api/proxy-image?url=')) {
+                                        const originalUrl = decodeURIComponent(target.src.split('url=')[1]);
+                                        target.src = originalUrl;
+                                      }
+                                    }}
+                                  />
                                 ) : (
                                   <Plus size={24} className="text-white/20 group-hover:text-brand transition-colors" />
                                 )}
