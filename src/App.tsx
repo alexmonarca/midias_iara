@@ -39,7 +39,9 @@ import {
   CreditCard,
   Eye,
   EyeOff,
-  MessageCircle
+  MessageCircle,
+  Calendar,
+  MoreVertical
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -63,7 +65,7 @@ declare global {
   }
 }
 
-type Tab = 'geracao' | 'marca' | 'historico';
+type Tab = 'geracao' | 'agendamento' | 'marca' | 'historico';
 type Format = 'texto' | 'quadrado' | 'retrato' | 'story';
 
 interface Profile {
@@ -297,6 +299,16 @@ export default function App() {
   const [customTone, setCustomTone] = useState('');
   const [editingImage, setEditingImage] = useState<string | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isDesktopMenuOpen, setIsDesktopMenuOpen] = useState(false);
+  const [showCreditsTooltip, setShowCreditsTooltip] = useState(false);
+  const [scheduledPosts, setScheduledPosts] = useState<any[]>([]);
+  const [isScheduling, setIsScheduling] = useState(false);
+  const [scheduleForm, setScheduleForm] = useState({
+    image_url: '',
+    caption: '',
+    date: '',
+    time: ''
+  });
   const [showPassword, setShowPassword] = useState(false);
   const [instaHandle, setInstaHandle] = useState('');
   const [isImportingInsta, setIsImportingInsta] = useState(false);
@@ -505,6 +517,74 @@ export default function App() {
       console.warn('Could not extract colors from logo:', e);
     }
   };
+  const loadScheduledPosts = async () => {
+    if (!session?.user) return;
+    try {
+      const { data, error } = await supabase
+        .from('scheduled_posts')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .order('scheduled_date', { ascending: true });
+      
+      if (error) throw error;
+      setScheduledPosts(data || []);
+    } catch (error) {
+      console.error('Error loading scheduled posts:', error);
+    }
+  };
+
+  const handleSchedulePost = async () => {
+    if (!session?.user) return;
+    if (!scheduleForm.image_url || !scheduleForm.caption || !scheduleForm.date || !scheduleForm.time) {
+      showToast('Preencha todos os campos para agendar', 'error');
+      return;
+    }
+
+    setIsScheduling(true);
+    try {
+      const { error } = await supabase
+        .from('scheduled_posts')
+        .insert([{
+          user_id: session.user.id,
+          image_url: scheduleForm.image_url,
+          caption: scheduleForm.caption,
+          scheduled_date: scheduleForm.date,
+          scheduled_time: scheduleForm.time,
+          status: 'pending'
+        }]);
+
+      if (error) throw error;
+
+      showToast('Postagem agendada com sucesso!', 'success');
+      setScheduleForm({ image_url: '', caption: '', date: '', time: '' });
+      loadScheduledPosts();
+    } catch (error: any) {
+      showToast('Erro ao agendar: ' + error.message, 'error');
+    } finally {
+      setIsScheduling(false);
+    }
+  };
+
+  const deleteScheduledPost = async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from('scheduled_posts')
+        .delete()
+        .eq('id', id);
+      if (error) throw error;
+      setScheduledPosts(prev => prev.filter(p => p.id !== id));
+      showToast('Agendamento removido', 'success');
+    } catch (error) {
+      showToast('Erro ao remover agendamento', 'error');
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'agendamento') {
+      loadScheduledPosts();
+    }
+  }, [activeTab]);
+
   const handleAISearchFallback = async (handle: string) => {
     try {
       const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
@@ -917,6 +997,7 @@ Inclua hashtags relevantes.` }
 
         if (type === 'logo') {
           setBrand(prev => ({ ...prev, logo_url: publicUrl }));
+          setScheduleForm(prev => ({ ...prev, image_url: publicUrl }));
         } else {
           const refs = JSON.parse(brand.reference_images || '[]');
           refs[index!] = publicUrl;
@@ -1144,16 +1225,78 @@ Inclua hashtags relevantes.` }
                 </div>
                 
                 {/* Mobile Credits Badge */}
-                <div className="md:hidden flex items-center gap-1.5 px-3 py-1.5 bg-brand/10 rounded-full border border-brand/20">
-                  <Zap size={10} className="text-brand" />
-                  <span className="text-[9px] font-black text-brand">{credits}</span>
+                <div className="md:hidden relative">
+                  <button 
+                    onClick={() => setShowCreditsTooltip(!showCreditsTooltip)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-brand/10 rounded-full border border-brand/20"
+                  >
+                    <Zap size={10} className="text-brand" />
+                    <span className="text-[9px] font-black text-brand">{credits}</span>
+                    <Plus size={10} className="text-brand ml-0.5" />
+                  </button>
+
+                  <AnimatePresence>
+                    {showCreditsTooltip && (
+                      <>
+                        <div className="fixed inset-0 z-[70]" onClick={() => setShowCreditsTooltip(false)} />
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.9, y: 10 }}
+                          className="absolute right-0 top-full mt-2 w-64 bg-[#111827] border border-white/10 rounded-2xl shadow-2xl p-4 z-[80] backdrop-blur-xl"
+                        >
+                          <p className="text-[11px] text-white/80 leading-relaxed mb-3">
+                            Adicionar créditos agora? Faça login e acesse a aba "Assinatura".
+                          </p>
+                          <a 
+                            href="https://app.monarcahub.com/assinatura"
+                            className="flex items-center justify-center w-full py-2 bg-brand text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-brand-light transition-all"
+                          >
+                            Carregar
+                          </a>
+                        </motion.div>
+                      </>
+                    )}
+                  </AnimatePresence>
                 </div>
                 
                 {/* Desktop Credits */}
-                <div className="hidden lg:flex items-center gap-3 ml-6 px-4 py-2 bg-white/5 rounded-2xl border border-white/5">
-                  <Zap size={14} className="text-brand" />
-                  <span className="text-[10px] font-black text-white/40 uppercase tracking-widest">Créditos:</span>
-                  <span className="text-xs font-black text-brand">{credits}</span>
+                <div className="hidden lg:flex relative">
+                  <button 
+                    onClick={() => setShowCreditsTooltip(!showCreditsTooltip)}
+                    className="flex items-center gap-3 ml-6 px-4 py-2 bg-white/5 rounded-2xl border border-white/5 hover:bg-white/10 transition-all group"
+                  >
+                    <Zap size={14} className="text-brand" />
+                    <span className="text-[10px] font-black text-white/40 uppercase tracking-widest">Créditos:</span>
+                    <span className="text-xs font-black text-brand">{credits}</span>
+                    <div className="w-5 h-5 rounded-lg bg-brand/10 flex items-center justify-center text-brand group-hover:bg-brand group-hover:text-white transition-all">
+                      <Plus size={12} />
+                    </div>
+                  </button>
+
+                  <AnimatePresence>
+                    {showCreditsTooltip && (
+                      <>
+                        <div className="fixed inset-0 z-[70]" onClick={() => setShowCreditsTooltip(false)} />
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                          className="absolute left-6 top-full mt-2 w-64 bg-[#111827] border border-white/10 rounded-2xl shadow-2xl p-4 z-[80] backdrop-blur-xl"
+                        >
+                          <p className="text-[11px] text-white/80 leading-relaxed mb-3">
+                            Adicionar créditos agora? Faça login e acesse a aba "Assinatura".
+                          </p>
+                          <a 
+                            href="https://app.monarcahub.com/assinatura"
+                            className="flex items-center justify-center w-full py-2 bg-brand text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-brand-light transition-all"
+                          >
+                            Carregar
+                          </a>
+                        </motion.div>
+                      </>
+                    )}
+                  </AnimatePresence>
                 </div>
               </div>
 
@@ -1171,45 +1314,76 @@ Inclua hashtags relevantes.` }
                     Gerar
                   </button>
                   <button 
-                    onClick={() => setActiveTab('marca')}
+                    onClick={() => setActiveTab('agendamento')}
                     className={cn(
                       "px-8 py-3 rounded-2xl text-sm font-bold transition-all duration-300 flex items-center gap-2",
-                      activeTab === 'marca' ? "btn-gradient text-white shadow-[0_0_20px_rgba(234,88,12,0.4)] scale-105" : "text-white/40 hover:text-white hover:bg-white/5"
+                      activeTab === 'agendamento' ? "btn-gradient text-white shadow-[0_0_20px_rgba(234,88,12,0.4)] scale-105" : "text-white/40 hover:text-white hover:bg-white/5"
                     )}
                   >
-                    <Palette size={16} />
-                    Marca
-                  </button>
-                  <button 
-                    onClick={() => setActiveTab('historico')}
-                    className={cn(
-                      "px-8 py-3 rounded-2xl text-sm font-bold transition-all duration-300 flex items-center gap-2",
-                      activeTab === 'historico' ? "btn-gradient text-white shadow-[0_0_20px_rgba(234,88,12,0.4)] scale-105" : "text-white/40 hover:text-white hover:bg-white/5"
-                    )}
-                  >
-                    <History size={16} />
-                    Histórico
+                    <Calendar size={16} />
+                    Postar / Agendar
                   </button>
                 </div>
 
-                <button 
-                  onClick={() => {
-                    setChatMessages([{ role: 'assistant', content: 'Me diga o que você quer criar e eu gero a arte + legenda no seu estilo. Você só precisa configurar sua marca uma vez na aba "Marca".', timestamp: Date.now() }]);
-                    setLastResult(null);
-                  }}
-                  className="w-12 h-12 flex items-center justify-center text-white/40 hover:text-brand hover:bg-brand/10 rounded-2xl transition-all ml-2 group"
-                  title="Resetar"
-                >
-                  <RefreshCw size={20} className="group-hover:rotate-180 transition-transform duration-500" />
-                </button>
+                <div className="relative ml-2">
+                  <button 
+                    onClick={() => setIsDesktopMenuOpen(!isDesktopMenuOpen)}
+                    className={cn(
+                      "w-12 h-12 flex items-center justify-center rounded-2xl transition-all group",
+                      isDesktopMenuOpen ? "bg-brand/10 text-brand" : "text-white/40 hover:text-white hover:bg-white/5"
+                    )}
+                  >
+                    <MoreVertical size={20} />
+                  </button>
 
-                <button 
-                  onClick={handleLogout}
-                  className="w-12 h-12 flex items-center justify-center text-white/40 hover:text-red-500 hover:bg-red-500/10 rounded-2xl transition-all ml-2 group"
-                  title="Sair"
-                >
-                  <LogOut size={20} />
-                </button>
+                  <AnimatePresence>
+                    {isDesktopMenuOpen && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setIsDesktopMenuOpen(false)} />
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                          className="absolute right-0 mt-2 w-56 bg-[#111827] border border-white/10 rounded-2xl shadow-2xl p-2 z-50 backdrop-blur-xl"
+                        >
+                          <button 
+                            onClick={() => { setActiveTab('marca'); setIsDesktopMenuOpen(false); }}
+                            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-white/60 hover:text-white hover:bg-white/5 transition-all"
+                          >
+                            <Palette size={16} />
+                            Marca
+                          </button>
+                          <button 
+                            onClick={() => { setActiveTab('historico'); setIsDesktopMenuOpen(false); }}
+                            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-white/60 hover:text-white hover:bg-white/5 transition-all"
+                          >
+                            <History size={16} />
+                            Histórico
+                          </button>
+                          <div className="h-px bg-white/5 my-2" />
+                          <button 
+                            onClick={() => {
+                              setChatMessages([{ role: 'assistant', content: 'Me diga o que você quer criar e eu gero a arte + legenda no seu estilo. Você só precisa configurar sua marca uma vez na aba "Marca".', timestamp: Date.now() }]);
+                              setLastResult(null);
+                              setIsDesktopMenuOpen(false);
+                            }}
+                            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-white/60 hover:text-brand hover:bg-brand/10 transition-all"
+                          >
+                            <RefreshCw size={16} />
+                            Resetar
+                          </button>
+                          <button 
+                            onClick={() => { handleLogout(); setIsDesktopMenuOpen(false); }}
+                            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-white/60 hover:text-red-500 hover:bg-red-500/10 transition-all"
+                          >
+                            <LogOut size={16} />
+                            Sair
+                          </button>
+                        </motion.div>
+                      </>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
 
               {/* Mobile Menu Toggle */}
@@ -1234,11 +1408,19 @@ Inclua hashtags relevantes.` }
                         <Zap size={18} className="text-brand" />
                         <span className="text-xs font-bold uppercase tracking-widest text-white/60">Seus Créditos</span>
                       </div>
-                      <span className="text-sm font-black text-brand">{credits}</span>
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-black text-brand">{credits}</span>
+                        <a 
+                          href="https://app.monarcahub.com/assinatura"
+                          className="w-6 h-6 rounded-lg bg-brand flex items-center justify-center text-white shadow-lg shadow-brand/20"
+                        >
+                          <Plus size={14} />
+                        </a>
+                      </div>
                     </div>
 
                     {/* App Navigation */}
-                    <div className="grid grid-cols-3 gap-2 mb-4">
+                    <div className="grid grid-cols-3 gap-2 mb-2">
                       <button 
                         onClick={() => { setActiveTab('geracao'); setIsMobileMenuOpen(false); }}
                         className={cn(
@@ -1270,6 +1452,17 @@ Inclua hashtags relevantes.` }
                         Histórico
                       </button>
                     </div>
+
+                    <button 
+                      onClick={() => { setActiveTab('agendamento'); setIsMobileMenuOpen(false); }}
+                      className={cn(
+                        "flex items-center justify-center gap-3 p-4 rounded-xl text-xs font-bold transition-all mb-4",
+                        activeTab === 'agendamento' ? "bg-brand text-white" : "bg-white/5 text-white/60"
+                      )}
+                    >
+                      <Calendar size={18} />
+                      Postar / Agendar
+                    </button>
 
                     <div className="h-px bg-white/10 my-2" />
 
@@ -1370,6 +1563,7 @@ Inclua hashtags relevantes.` }
         onSelectLogo={(url) => {
           const proxiedUrl = `/api/proxy-image?url=${encodeURIComponent(url)}`;
           setBrand(prev => ({ ...prev, logo_url: proxiedUrl }));
+          setScheduleForm(prev => ({ ...prev, image_url: proxiedUrl }));
           extractColorsFromLogo(url);
           showToast('Logo selecionado!', 'success');
         }}
@@ -1898,6 +2092,141 @@ Inclua hashtags relevantes.` }
                     <Check size={20} />
                     Consolidar DNA da Marca
                   </button>
+                </motion.div>
+              )}
+
+              {activeTab === 'agendamento' && (
+                <motion.div 
+                  key="agendamento"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="p-12 space-y-10 relative z-10"
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold tracking-tight">Postar / Agendar</h2>
+                      <p className="text-xs text-white/40 mt-1 uppercase tracking-widest font-bold">Gerencie suas publicações nas redes sociais</p>
+                    </div>
+                    <div className="w-12 h-12 glass rounded-2xl flex items-center justify-center text-brand neon-border">
+                      <Calendar size={24} />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div className="glass rounded-[32px] p-8 border border-white/5 space-y-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-1.5 h-1.5 bg-brand rounded-full" />
+                        <label className="text-xs font-black uppercase tracking-[0.2em] text-white/40">Nova Publicação</label>
+                      </div>
+                      
+                      <div className="space-y-4">
+                        <div 
+                          onClick={() => handleFileUpload('logo')} // Reusing logo upload for simplicity or create a specific one
+                          className="aspect-video glass rounded-2xl border border-dashed border-white/10 flex flex-col items-center justify-center gap-3 hover:bg-white/5 transition-all cursor-pointer group overflow-hidden"
+                        >
+                          {scheduleForm.image_url ? (
+                            <img src={scheduleForm.image_url} className="w-full h-full object-cover" alt="To Schedule" />
+                          ) : (
+                            <>
+                              <Upload size={24} className="text-white/20 group-hover:text-brand transition-colors" />
+                              <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Clique para upload da imagem</p>
+                            </>
+                          )}
+                        </div>
+                        
+                        <textarea 
+                          placeholder="Escreva sua legenda aqui..."
+                          value={scheduleForm.caption}
+                          onChange={(e) => setScheduleForm(prev => ({ ...prev, caption: e.target.value }))}
+                          className="w-full bg-black/40 border border-white/10 rounded-2xl px-6 py-4 text-sm focus:outline-none focus:border-brand/50 h-32 resize-none transition-all placeholder:text-white/20"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest ml-2">Data</label>
+                          <input 
+                            type="date" 
+                            value={scheduleForm.date}
+                            onChange={(e) => setScheduleForm(prev => ({ ...prev, date: e.target.value }))}
+                            className="w-full glass rounded-xl px-4 py-3 text-xs font-bold focus:outline-none focus:border-brand/50" 
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest ml-2">Hora</label>
+                          <input 
+                            type="time" 
+                            value={scheduleForm.time}
+                            onChange={(e) => setScheduleForm(prev => ({ ...prev, time: e.target.value }))}
+                            className="w-full glass rounded-xl px-4 py-3 text-xs font-bold focus:outline-none focus:border-brand/50" 
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <button 
+                          onClick={handleSchedulePost}
+                          disabled={isScheduling}
+                          className="w-full btn-gradient text-white font-black py-4 rounded-2xl shadow-lg shadow-brand/20 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 uppercase tracking-widest text-xs disabled:opacity-50"
+                        >
+                          {isScheduling ? <Loader2 size={16} className="animate-spin" /> : <Calendar size={16} />}
+                          {isScheduling ? 'Agendando...' : 'Agendar Postagem'}
+                        </button>
+                        <p className="text-center text-[10px] font-bold text-white/20 uppercase tracking-widest">
+                          Consumo: 20 Créditos por agendamento
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-1.5 h-1.5 bg-brand rounded-full" />
+                        <label className="text-xs font-black uppercase tracking-[0.2em] text-white/40">Próximos Agendamentos</label>
+                      </div>
+
+                      <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar">
+                        {scheduledPosts.length === 0 ? (
+                          <div className="py-12 text-center glass rounded-[32px] border border-dashed border-white/5">
+                            <p className="text-[10px] font-bold text-white/20 uppercase tracking-widest">Nenhum post agendado</p>
+                          </div>
+                        ) : (
+                          scheduledPosts.map((post) => (
+                            <div key={post.id} className="glass rounded-2xl p-4 border border-white/5 flex items-center gap-4 group">
+                              <div className="w-16 h-16 rounded-xl overflow-hidden bg-white/5 flex-shrink-0">
+                                <img src={post.image_url} className="w-full h-full object-cover" alt="Scheduled" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-bold text-white/80 truncate">{post.caption}</p>
+                                <p className="text-[10px] text-brand font-bold mt-1 uppercase tracking-widest">
+                                  {new Date(post.scheduled_date + 'T' + post.scheduled_time).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                                </p>
+                              </div>
+                              <button 
+                                onClick={() => deleteScheduledPost(post.id)}
+                                className="p-2 hover:bg-red-500/10 rounded-lg text-white/20 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100"
+                              >
+                                <X size={16} />
+                              </button>
+                            </div>
+                          ))
+                        )}
+                        
+                        <div className="py-8 text-center glass rounded-[32px] border border-dashed border-white/5">
+                          <p className="text-[10px] font-bold text-white/20 uppercase tracking-widest">Conecte suas redes para automação</p>
+                          <p className="text-[10px] text-brand font-bold mt-1 uppercase tracking-widest">Fale com suporte para ativar essa função pra você</p>
+                          <a 
+                            href="https://wa.me/5555996079863?text=Quero%20ativar%20a%20função%20de%20postagem%20automática%20no%20meu%20Instagram."
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-4 inline-flex px-6 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-[10px] font-bold text-white/60 transition-all"
+                          >
+                            Conectar Instagram
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </motion.div>
               )}
 
