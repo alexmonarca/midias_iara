@@ -76,12 +76,15 @@ interface Profile {
 }
 
 interface BrandSettings {
+  name: string;
   colors: string[];
   logo_url: string;
   reference_images: string; // JSON string of URL array
   tone_of_voice: string;
   brand_personality: string;
   personality: string;
+  is_instagram_connected: boolean;
+  instagram_account_id: string;
 }
 
 interface ChatMessage {
@@ -275,12 +278,15 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('geracao');
   const [profile, setProfile] = useState<Profile | null>(null);
   const [brand, setBrand] = useState<BrandSettings>({
+    name: '',
     colors: ['#EA580C', '#f2f2f2'],
     logo_url: '',
     reference_images: '[]',
     tone_of_voice: 'Profissional',
     brand_personality: '',
-    personality: ''
+    personality: '',
+    is_instagram_connected: false,
+    instagram_account_id: ''
   });
   const [credits, setCredits] = useState(0);
   
@@ -303,11 +309,14 @@ export default function App() {
   const [showCreditsTooltip, setShowCreditsTooltip] = useState(false);
   const [scheduledPosts, setScheduledPosts] = useState<any[]>([]);
   const [isScheduling, setIsScheduling] = useState(false);
+  const [n8nWebhookUrl, setN8nWebhookUrl] = useState(''); // Você pode definir isso via banco ou env
   const [scheduleForm, setScheduleForm] = useState({
     image_url: '',
+    carousel_images: [] as string[],
     caption: '',
     date: '',
-    time: ''
+    time: '',
+    format: 'quadrado' as 'story' | 'quadrado' | 'retrato' | 'carrossel'
   });
   const [showPassword, setShowPassword] = useState(false);
   const [instaHandle, setInstaHandle] = useState('');
@@ -535,28 +544,60 @@ export default function App() {
 
   const handleSchedulePost = async () => {
     if (!session?.user) return;
-    if (!scheduleForm.image_url || !scheduleForm.caption || !scheduleForm.date || !scheduleForm.time) {
+    if ((scheduleForm.format !== 'carrossel' && !scheduleForm.image_url) || 
+        (scheduleForm.format === 'carrossel' && scheduleForm.carousel_images.length === 0) || 
+        !scheduleForm.caption || !scheduleForm.date || !scheduleForm.time) {
       showToast('Preencha todos os campos para agendar', 'error');
       return;
     }
 
     setIsScheduling(true);
     try {
-      const { error } = await supabase
+      const postData = {
+        user_id: session.user.id,
+        image_url: scheduleForm.image_url,
+        carousel_images: scheduleForm.carousel_images,
+        caption: scheduleForm.caption,
+        scheduled_date: scheduleForm.date,
+        scheduled_time: scheduleForm.time,
+        format: scheduleForm.format,
+        status: 'pending'
+      };
+
+      // 1. Salvar no Supabase
+      const { data: insertedData, error } = await supabase
         .from('scheduled_posts')
-        .insert([{
-          user_id: session.user.id,
-          image_url: scheduleForm.image_url,
-          caption: scheduleForm.caption,
-          scheduled_date: scheduleForm.date,
-          scheduled_time: scheduleForm.time,
-          status: 'pending'
-        }]);
+        .insert([postData])
+        .select();
 
       if (error) throw error;
 
+      // 2. Disparar Webhook para n8n se o Instagram estiver conectado
+      if (brand.is_instagram_connected) {
+        try {
+          const WEBHOOK_URL = 'https://webhook.monarcahub.com/webhook/midias'; 
+          
+          await fetch(WEBHOOK_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'create',
+              ...postData,
+              id: insertedData?.[0]?.id,
+              user_email: session.user.email,
+              brand_name: brand.name,
+              instagram_id: brand.instagram_account_id
+            })
+          });
+          console.log('Webhook disparado para n8n');
+        } catch (webhookError) {
+          console.error('Erro ao disparar webhook:', webhookError);
+          // Não travamos o processo se o webhook falhar, pois o dado já está no banco
+        }
+      }
+
       showToast('Postagem agendada com sucesso!', 'success');
-      setScheduleForm({ image_url: '', caption: '', date: '', time: '' });
+      setScheduleForm({ image_url: '', carousel_images: [], caption: '', date: '', time: '', format: 'quadrado' });
       loadScheduledPosts();
     } catch (error: any) {
       showToast('Erro ao agendar: ' + error.message, 'error');
@@ -567,11 +608,34 @@ export default function App() {
 
   const deleteScheduledPost = async (id: string) => {
     try {
+      // 1. Remover do Supabase
       const { error } = await supabase
         .from('scheduled_posts')
         .delete()
         .eq('id', id);
+      
       if (error) throw error;
+
+      // 2. Notificar n8n se o Instagram estiver conectado
+      if (brand.is_instagram_connected) {
+        try {
+          const WEBHOOK_URL = 'https://webhook.monarcahub.com/webhook/midias';
+          await fetch(WEBHOOK_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'delete',
+              id: id,
+              user_email: session.user.email,
+              instagram_id: brand.instagram_account_id
+            })
+          });
+          console.log('Webhook de cancelamento disparado para n8n');
+        } catch (webhookError) {
+          console.error('Erro ao disparar webhook de cancelamento:', webhookError);
+        }
+      }
+
       setScheduledPosts(prev => prev.filter(p => p.id !== id));
       showToast('Agendamento removido', 'success');
     } catch (error) {
@@ -971,7 +1035,7 @@ Inclua hashtags relevantes.` }
     }
   };
 
-  const handleFileUpload = async (type: 'logo' | 'ref', index?: number) => {
+  const handleFileUpload = async (type: 'logo' | 'ref' | 'schedule' | 'carousel', index?: number) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
@@ -981,9 +1045,11 @@ Inclua hashtags relevantes.` }
 
       try {
         const timestamp = Date.now();
-        const path = type === 'logo' 
-          ? `${session.user.id}/logo-${timestamp}` 
-          : `${session.user.id}/ref-${index}-${timestamp}`;
+        let path = '';
+        if (type === 'logo') path = `${session.user.id}/logo-${timestamp}`;
+        else if (type === 'ref') path = `${session.user.id}/ref-${index}-${timestamp}`;
+        else if (type === 'schedule') path = `${session.user.id}/schedule-${timestamp}`;
+        else if (type === 'carousel') path = `${session.user.id}/carousel-${index}-${timestamp}`;
         
         const { error: uploadError } = await supabase.storage
           .from('brand-assets')
@@ -997,7 +1063,14 @@ Inclua hashtags relevantes.` }
 
         if (type === 'logo') {
           setBrand(prev => ({ ...prev, logo_url: publicUrl }));
+        } else if (type === 'schedule') {
           setScheduleForm(prev => ({ ...prev, image_url: publicUrl }));
+        } else if (type === 'carousel') {
+          setScheduleForm(prev => {
+            const newCarousel = [...prev.carousel_images];
+            newCarousel[index!] = publicUrl;
+            return { ...prev, carousel_images: newCarousel };
+          });
         } else {
           const refs = JSON.parse(brand.reference_images || '[]');
           refs[index!] = publicUrl;
@@ -2106,7 +2179,7 @@ Inclua hashtags relevantes.` }
                   <div className="flex items-center justify-between">
                     <div>
                       <h2 className="text-2xl font-bold tracking-tight">Postar / Agendar</h2>
-                      <p className="text-xs text-white/40 mt-1 uppercase tracking-widest font-bold">Gerencie suas publicações nas redes sociais</p>
+                      <p className="text-xs text-white/40 mt-1 uppercase tracking-widest font-bold">Gerencie suas publicações no Instagram</p>
                     </div>
                     <div className="w-12 h-12 glass rounded-2xl flex items-center justify-center text-brand neon-border">
                       <Calendar size={24} />
@@ -2119,21 +2192,87 @@ Inclua hashtags relevantes.` }
                         <div className="w-1.5 h-1.5 bg-brand rounded-full" />
                         <label className="text-xs font-black uppercase tracking-[0.2em] text-white/40">Nova Publicação</label>
                       </div>
+
+                      {/* Formato Selection */}
+                      <div className="space-y-3">
+                        <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest ml-2">Formato</label>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          {[
+                            { id: 'story', label: 'Story', icon: <Smartphone size={16} /> },
+                            { id: 'quadrado', label: 'Feed 1:1', icon: <Square size={16} /> },
+                            { id: 'retrato', label: 'Feed 4:5', icon: <RectangleVertical size={16} /> },
+                            { id: 'carrossel', label: 'Carrossel', icon: <Copy size={16} /> },
+                          ].map((fmt) => (
+                            <button
+                              key={fmt.id}
+                              onClick={() => setScheduleForm(prev => ({ ...prev, format: fmt.id as any }))}
+                              className={cn(
+                                "flex items-center justify-center gap-2 py-3 rounded-xl border transition-all text-[10px] font-bold uppercase tracking-widest",
+                                scheduleForm.format === fmt.id 
+                                  ? "bg-brand/10 border-brand text-white" 
+                                  : "bg-white/5 border-white/5 text-white/40 hover:bg-white/10"
+                              )}
+                            >
+                              {fmt.icon}
+                              {fmt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                       
                       <div className="space-y-4">
-                        <div 
-                          onClick={() => handleFileUpload('logo')} // Reusing logo upload for simplicity or create a specific one
-                          className="aspect-video glass rounded-2xl border border-dashed border-white/10 flex flex-col items-center justify-center gap-3 hover:bg-white/5 transition-all cursor-pointer group overflow-hidden"
-                        >
-                          {scheduleForm.image_url ? (
-                            <img src={scheduleForm.image_url} className="w-full h-full object-cover" alt="To Schedule" />
-                          ) : (
-                            <>
-                              <Upload size={24} className="text-white/20 group-hover:text-brand transition-colors" />
-                              <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Clique para upload da imagem</p>
-                            </>
-                          )}
-                        </div>
+                        {scheduleForm.format === 'carrossel' ? (
+                          <div className="space-y-4">
+                            <div className="grid grid-cols-3 gap-2">
+                              {[0, 1, 2, 3, 4, 5].map((idx) => (
+                                <div 
+                                  key={idx}
+                                  onClick={() => handleFileUpload('carousel', idx)}
+                                  className="aspect-square glass rounded-xl border border-dashed border-white/10 flex flex-col items-center justify-center gap-1 hover:bg-white/5 transition-all cursor-pointer group overflow-hidden relative"
+                                >
+                                  {scheduleForm.carousel_images[idx] ? (
+                                    <>
+                                      <img src={scheduleForm.carousel_images[idx]} className="w-full h-full object-cover" alt={`Carousel ${idx}`} />
+                                      <button 
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setScheduleForm(prev => {
+                                            const newImages = [...prev.carousel_images];
+                                            newImages.splice(idx, 1);
+                                            return { ...prev, carousel_images: newImages };
+                                          });
+                                        }}
+                                        className="absolute top-1 right-1 p-1 bg-black/60 rounded-lg text-white/40 hover:text-red-500 transition-colors"
+                                      >
+                                        <X size={12} />
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Plus size={16} className="text-white/20 group-hover:text-brand transition-colors" />
+                                      <span className="text-[8px] font-bold text-white/20 uppercase">{idx + 1}</span>
+                                    </>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                            <p className="text-[9px] font-bold text-white/20 uppercase tracking-widest text-center">Adicione até 6 imagens para o carrossel</p>
+                          </div>
+                        ) : (
+                          <div 
+                            onClick={() => handleFileUpload('schedule')}
+                            className="aspect-video glass rounded-2xl border border-dashed border-white/10 flex flex-col items-center justify-center gap-3 hover:bg-white/5 transition-all cursor-pointer group overflow-hidden"
+                          >
+                            {scheduleForm.image_url ? (
+                              <img src={scheduleForm.image_url} className="w-full h-full object-cover" alt="To Schedule" />
+                            ) : (
+                              <>
+                                <Upload size={24} className="text-white/20 group-hover:text-brand transition-colors" />
+                                <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Clique para upload da imagem</p>
+                              </>
+                            )}
+                          </div>
+                        )}
                         
                         <textarea 
                           placeholder="Escreva sua legenda aqui..."
@@ -2213,16 +2352,36 @@ Inclua hashtags relevantes.` }
                         )}
                         
                         <div className="py-8 text-center glass rounded-[32px] border border-dashed border-white/5">
-                          <p className="text-[10px] font-bold text-white/20 uppercase tracking-widest">Conecte suas redes para automação</p>
-                          <p className="text-[10px] text-brand font-bold mt-1 uppercase tracking-widest">Fale com suporte para ativar essa função pra você</p>
-                          <a 
-                            href="https://wa.me/5555996079863?text=Quero%20ativar%20a%20função%20de%20postagem%20automática%20no%20meu%20Instagram."
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-4 inline-flex px-6 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-[10px] font-bold text-white/60 transition-all"
-                          >
-                            Conectar Instagram
-                          </a>
+                          {brand.is_instagram_connected ? (
+                            <div className="space-y-4 px-6">
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-center gap-2 text-emerald-500">
+                                  <Check size={16} />
+                                  <p className="text-[10px] font-bold uppercase tracking-widest">Instagram Conectado</p>
+                                </div>
+                                <p className="text-[9px] text-white/20 uppercase tracking-tight">Sua automação está ativa via Monarca Hub</p>
+                              </div>
+                              
+                              <div className="pt-4 border-t border-white/5">
+                                <p className="text-[9px] text-white/30 leading-relaxed italic">
+                                  * A ferramenta de postagem e agendamento é limitada e algumas funcionalidades não estão disponíveis no momento, como por exemplo marcar e inserir figurinhas e links nos stories.
+                                </p>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <p className="text-[10px] font-bold text-white/20 uppercase tracking-widest">Conecte suas redes para automação</p>
+                              <p className="text-[10px] text-brand font-bold mt-1 uppercase tracking-widest">Fale com suporte para ativar essa função pra você</p>
+                              <a 
+                                href="https://wa.me/5555996079863?text=Quero%20ativar%20a%20função%20de%20postagem%20automática%20no%20meu%20Instagram."
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-4 inline-flex px-6 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-[10px] font-bold text-white/60 transition-all"
+                              >
+                                Conectar Instagram
+                              </a>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
