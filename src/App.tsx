@@ -2496,7 +2496,7 @@ Inclua hashtags relevantes.` }
                           ) : (
                             <>
                               <p className="text-[10px] font-bold text-white/20 uppercase tracking-widest">Conecte suas redes para automação</p>
-                              <p className="text-[10px] text-brand font-bold mt-1 uppercase tracking-widest">Fale com suporte para ativar essa função pra você</p>
+                              <p className="text-[10px] text-brand font-bold mt-1 uppercase tracking-widest">Informe o suporte que vai conectar e receba orientação em tempo real se precisar</p>
                               <button 
                                 onClick={() => {
                                   setIsConnectionModalOpen(true);
