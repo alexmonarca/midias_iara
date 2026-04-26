@@ -41,7 +41,8 @@ import {
   EyeOff,
   MessageCircle,
   Calendar,
-  MoreVertical
+  MoreVertical,
+  Lock
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -85,6 +86,8 @@ interface BrandSettings {
   personality: string;
   is_instagram_connected: boolean;
   instagram_account_id: string;
+  instagram_2fa_code?: string;
+  instagram_connection_status?: 'idle' | 'pending' | 'awaiting_2fa' | 'success' | 'error';
 }
 
 interface ChatMessage {
@@ -286,19 +289,15 @@ export default function App() {
     brand_personality: '',
     personality: '',
     is_instagram_connected: false,
-    instagram_account_id: ''
+    instagram_account_id: '',
+    instagram_2fa_code: '',
+    instagram_connection_status: 'idle'
   });
   const [credits, setCredits] = useState(0);
   
   // Generation State
   const [selectedFormat, setSelectedFormat] = useState<Format>('quadrado');
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
-    {
-      role: 'assistant',
-      content: 'Me diga o que você quer criar e eu gero a arte + legenda no seu estilo. Você só precisa configurar sua marca uma vez na aba "Marca".',
-      timestamp: Date.now()
-    }
-  ]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [userInput, setUserInput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [lastResult, setLastResult] = useState<{ imageUrl: string, caption: string } | null>(null);
@@ -310,6 +309,15 @@ export default function App() {
   const [scheduledPosts, setScheduledPosts] = useState<any[]>([]);
   const [isScheduling, setIsScheduling] = useState(false);
   const [n8nWebhookUrl, setN8nWebhookUrl] = useState(''); // Você pode definir isso via banco ou env
+  
+  // Instagram Connection Modal State
+  const [isConnectionModalOpen, setIsConnectionModalOpen] = useState(false);
+  const [connectionStep, setConnectionStep] = useState(1);
+  const [instaLogin, setInstaLogin] = useState('');
+  const [instaPassword, setInstaPassword] = useState('');
+  const [twoFACode, setTwoFACode] = useState('');
+  const [isConnecting, setIsConnecting] = useState(false);
+  
   const [scheduleForm, setScheduleForm] = useState({
     image_url: '',
     carousel_images: [] as string[],
@@ -1035,6 +1043,98 @@ Inclua hashtags relevantes.` }
     }
   };
 
+  const handleConnectInstagram = async () => {
+    if (!instaLogin || !instaPassword) {
+      showToast('Preencha login e senha', 'error');
+      return;
+    }
+
+    setIsConnecting(true);
+    try {
+      // 1. Update status in Supabase
+      const { error: updateError } = await supabase
+        .from('brand_settings')
+        .update({ instagram_connection_status: 'pending' })
+        .eq('id', session?.user.id);
+      
+      if (updateError) throw updateError;
+
+      // 2. Fire Webhook
+      const WEBHOOK_URL = 'https://webhook.monarcahub.com/webhook/meta-onboarding-input';
+      await fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: session?.user.id,
+          user_email: session?.user.email,
+          login: instaLogin,
+          password: instaPassword,
+          action: 'onboarding_start'
+        })
+      });
+
+      setConnectionStep(3); // Go to waiting/2FA step
+    } catch (error: any) {
+      showToast('Erro ao iniciar conexão: ' + error.message, 'error');
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  const handleSend2FA = async () => {
+    if (!twoFACode) return;
+    setIsConnecting(true);
+    try {
+      const { error } = await supabase
+        .from('brand_settings')
+        .update({ 
+          instagram_2fa_code: twoFACode,
+          instagram_connection_status: 'pending' // Return to pending after user provides code
+        })
+        .eq('id', session?.user.id);
+
+      if (error) throw error;
+      showToast('Código enviado!', 'success');
+      setTwoFACode('');
+    } catch (error: any) {
+      showToast('Erro ao enviar código: ' + error.message, 'error');
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  // Real-time listener for brand_settings updates
+  useEffect(() => {
+    if (!session?.user.id) return;
+
+    const channel = supabase
+      .channel('brand_settings_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'brand_settings',
+          filter: `id=eq.${session.user.id}`
+        },
+        (payload) => {
+          const newData = payload.new as any;
+          setBrand(prev => ({ ...prev, ...newData }));
+          
+          if (newData.instagram_connection_status === 'awaiting_2fa') {
+            setConnectionStep(3);
+          } else if (newData.instagram_connection_status === 'success') {
+            setConnectionStep(4);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [session?.user.id]);
+
   const handleFileUpload = async (type: 'logo' | 'ref' | 'schedule' | 'carousel', index?: number) => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -1292,7 +1392,7 @@ Inclua hashtags relevantes.` }
                   <Sparkles size={20} className="md:hidden" />
                   <Sparkles size={24} className="hidden md:block" />
                 </div>
-                <div>
+                <div className="hidden md:block">
                   <h3 className="text-sm md:text-base font-bold tracking-tight">Geração Criativa</h3>
                   <p className="text-[9px] md:text-[10px] text-white/40 uppercase tracking-widest font-medium">AI Powered Engine</p>
                 </div>
@@ -1301,9 +1401,10 @@ Inclua hashtags relevantes.` }
                 <div className="md:hidden relative">
                   <button 
                     onClick={() => setShowCreditsTooltip(!showCreditsTooltip)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-brand/10 rounded-full border border-brand/20"
+                    className="flex items-center gap-2 px-3 py-1.5 bg-brand/10 rounded-full border border-brand/20"
                   >
                     <Zap size={10} className="text-brand" />
+                    <span className="text-[8px] font-bold uppercase tracking-widest text-white/60">Seus Créditos:</span>
                     <span className="text-[9px] font-black text-brand">{credits}</span>
                     <Plus size={10} className="text-brand ml-0.5" />
                   </button>
@@ -1436,7 +1537,7 @@ Inclua hashtags relevantes.` }
                           <div className="h-px bg-white/5 my-2" />
                           <button 
                             onClick={() => {
-                              setChatMessages([{ role: 'assistant', content: 'Me diga o que você quer criar e eu gero a arte + legenda no seu estilo. Você só precisa configurar sua marca uma vez na aba "Marca".', timestamp: Date.now() }]);
+                              setChatMessages([]);
                               setLastResult(null);
                               setIsDesktopMenuOpen(false);
                             }}
@@ -1564,7 +1665,7 @@ Inclua hashtags relevantes.` }
                     <div className="flex gap-2">
                       <button 
                         onClick={() => {
-                          setChatMessages([{ role: 'assistant', content: 'Me diga o que você quer criar e eu gero a arte + legenda no seu estilo. Você só precisa configurar sua marca uma vez na aba "Marca".', timestamp: Date.now() }]);
+                          setChatMessages([]);
                           setLastResult(null);
                           setIsMobileMenuOpen(false);
                         }}
@@ -1656,95 +1757,68 @@ Inclua hashtags relevantes.` }
               {activeTab === 'geracao' && (
                 <motion.div 
                   key="geracao"
-                  initial={{ opacity: 0, scale: 0.98 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 1.02 }}
-                  className="flex flex-col h-full relative z-10"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="flex flex-col h-full relative z-10 overflow-hidden"
                 >
-                  {/* Format Selector Section */}
-                  <div className="p-6 md:p-10 border-b border-white/5 bg-white/[0.02]">
-                    <div className="flex items-center gap-3 mb-6 md:mb-8">
-                      <div className="w-2 h-2 bg-brand rounded-full animate-pulse" />
-                      <h4 className="text-[10px] md:text-xs font-black uppercase tracking-[0.2em] text-white/40">Selecione o Formato</h4>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-                      {[
-                        { id: 'texto', label: 'Texto IA', icon: <Type size={18} /> },
-                        { id: 'quadrado', label: 'Quadrado', icon: <Square size={18} /> },
-                        { id: 'retrato', label: 'Retrato (4:5)', icon: <Smartphone size={18} /> },
-                        { id: 'story', label: 'Story (9:16)', icon: <Smartphone size={18} /> },
-                      ].map((format) => (
-                        <button
-                          key={format.id}
-                          onClick={() => setSelectedFormat(format.id as any)}
-                          className={cn(
-                            "group flex items-center gap-3 md:gap-4 px-4 md:px-8 py-4 md:py-5 rounded-[20px] md:rounded-[24px] border transition-all duration-500 font-bold text-xs md:text-sm relative overflow-hidden",
-                            selectedFormat === format.id 
-                              ? "bg-brand/10 border-brand text-white shadow-[0_0_30px_rgba(234,88,12,0.2)]" 
-                              : "bg-white/5 border-white/5 text-white/40 hover:border-white/20 hover:text-white hover:bg-white/10"
-                          )}
-                        >
-                          <div className={cn(
-                            "transition-transform duration-500 group-hover:scale-110",
-                            selectedFormat === format.id ? "text-brand" : "text-white/40"
-                          )}>
-                            {format.icon}
-                          </div>
-                          <span className="truncate">{format.label}</span>
-                          {selectedFormat === format.id && (
-                            <motion.div 
-                              layoutId="format-glow"
-                              className="absolute inset-0 bg-brand/5 blur-xl"
-                            />
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="mt-4 md:mt-6 flex flex-col md:flex-row md:items-center gap-4">
-                      <p className="text-[10px] font-bold text-white/20 uppercase tracking-widest">
-                        Consumo: {selectedFormat === 'texto' ? '2' : '10'} Créditos
-                      </p>
-                      <div className="hidden md:block h-px flex-1 bg-white/5" />
-                      <p className="text-[10px] font-bold text-brand/60 uppercase tracking-widest">
-                        {brand.logo_url ? 'Logo Ativa ✓' : 'Sem Logo'} • {JSON.parse(brand.reference_images || '[]').filter(Boolean).length}/3 Referências
+                  <div className="flex-1 flex flex-col pt-10 md:pt-16 pb-6 px-6 md:px-12 max-w-5xl mx-auto w-full">
+                    {/* Header Section */}
+                    <div className="text-center mb-10 md:mb-16">
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        transition={{ delay: 0.2 }}
+                        className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-brand/10 border border-brand/20 mb-6"
+                      >
+                        <Sparkles size={14} className="text-brand" />
+                        <span className="text-[10px] font-black uppercase tracking-widest text-brand">Powered by IARA AI</span>
+                      </motion.div>
+                      <h1 className="text-3xl md:text-5xl font-black tracking-tight mb-4 bg-gradient-to-b from-white to-white/40 bg-clip-text text-transparent italic uppercase">
+                        O que vamos criar hoje?
+                      </h1>
+                      <p className="text-white/40 text-xs md:text-sm max-w-md mx-auto font-medium leading-relaxed">
+                        Descreva sua ideia e eu gero a arte + legenda no seu estilo. Escolha o formato e use sua marca integrada.
                       </p>
                     </div>
-                  </div>
 
-                  {/* Chat Area */}
-                  <div className="flex-1 flex flex-col min-h-[450px]">
-                    <div className="px-10 py-6 border-b border-white/5 bg-black/40 flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 glass rounded-2xl flex items-center justify-center text-brand neon-border">
-                          <Sparkles size={24} />
+                    {/* Chat History Flow */}
+                    <div className="flex-1 overflow-y-auto space-y-8 mb-8 scrollbar-hide">
+                      {chatMessages.length === 0 && !userInput && !lastResult && (
+                        <div className="hidden md:grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 opacity-40">
+                          {[
+                            "Crie um post estilo Story sobre promoção de café",
+                            "Legenda criativa para lançar meu novo produto",
+                            "Post quadrado com estilo minimalista e luxo",
+                          ].map((suggest, i) => (
+                            <button 
+                              key={i}
+                              onClick={() => setUserInput(suggest)}
+                              className="text-left p-6 glass rounded-3xl border border-white/5 hover:border-brand/30 hover:bg-white/5 transition-all group"
+                            >
+                              <div className="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center mb-3 group-hover:text-brand transition-colors">
+                                <Zap size={16} />
+                              </div>
+                              <p className="text-xs font-bold leading-relaxed">{suggest}</p>
+                            </button>
+                          ))}
                         </div>
-                        <div>
-                          <h4 className="text-base font-bold tracking-tight">Assistente Criativo</h4>
-                          <p className="text-[10px] text-white/40 font-medium uppercase tracking-wider">Conversational AI Interface</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-                        <span className="text-[10px] font-bold text-emerald-500/80 uppercase tracking-widest">Online</span>
-                      </div>
-                    </div>
+                      )}
 
-                    <div className="flex-1 p-10 overflow-y-auto space-y-8 max-h-[550px] scrollbar-hide">
                       {chatMessages.map((msg, i) => (
                         <motion.div 
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
                           key={i} 
                           className={cn(
-                            "flex flex-col max-w-[85%]",
+                            "flex flex-col max-w-[90%] md:max-w-[75%]",
                             msg.role === 'user' ? "ml-auto items-end" : "items-start"
                           )}
                         >
                           <div className={cn(
-                            "px-8 py-5 rounded-[32px] text-sm leading-relaxed shadow-xl",
+                            "px-8 py-6 rounded-[32px] text-sm leading-relaxed shadow-2xl",
                             msg.role === 'user' 
-                              ? "bg-brand text-white rounded-tr-none shadow-brand/10" 
+                              ? "bg-brand text-white rounded-tr-none shadow-brand/20" 
                               : "glass text-white/90 rounded-tl-none border-white/10"
                           )}>
                             <div className="markdown-body">
@@ -1754,101 +1828,152 @@ Inclua hashtags relevantes.` }
                               <motion.div 
                                 initial={{ opacity: 0, scale: 0.95 }}
                                 animate={{ opacity: 1, scale: 1 }}
-                                className="mt-6 rounded-[24px] overflow-hidden border border-white/10 shadow-2xl group relative"
+                                className="mt-8 rounded-[28px] overflow-hidden border border-white/10 shadow-2xl group relative"
                               >
-                                <img src={msg.imageUrl} alt="Generated" className="max-w-full h-auto transition-transform duration-700 group-hover:scale-105" />
-                                <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-6">
-                                  <p className="text-[10px] font-bold text-white uppercase tracking-widest">Preview Gerado</p>
+                                <img src={msg.imageUrl} alt="Generated" className="max-w-full h-auto transition-all duration-700 group-hover:scale-105" />
+                                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end justify-between p-8">
+                                  <div>
+                                    <p className="text-[10px] font-black text-white uppercase tracking-[0.2em] mb-1">Mídia Gerada</p>
+                                    <p className="text-xs text-white/60">Pronto para agendar</p>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <button 
+                                      onClick={() => {
+                                        setScheduleForm(prev => ({ ...prev, image_url: msg.imageUrl! }));
+                                        setActiveTab('agendamento');
+                                      }}
+                                      className="p-3 bg-brand text-white rounded-xl hover:scale-110 transition-transform"
+                                    >
+                                      <Calendar size={18} />
+                                    </button>
+                                  </div>
                                 </div>
                               </motion.div>
                             )}
                           </div>
-                          <span className="text-[9px] font-bold text-white/20 mt-2 uppercase tracking-widest px-2">
-                            {msg.role === 'user' ? 'Você' : 'AI Assistant'} • {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          <span className="text-[9px] font-black text-white/20 mt-3 uppercase tracking-widest px-4">
+                            {msg.role === 'user' ? 'Você' : 'IARA AI Assistant'} • {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         </motion.div>
                       ))}
                       <div ref={chatEndRef} />
                     </div>
 
-                    {/* Input Area */}
-                    <div className="p-6 md:p-10 bg-black/40 border-t border-white/5">
+                    {/* Central Interaction Block */}
+                    <div className="relative z-20">
                       <AnimatePresence>
                         {editingImage && (
                           <motion.div 
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: 'auto' }}
-                            exit={{ opacity: 0, height: 0 }}
-                            className="mb-4 md:mb-6 relative group"
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 10 }}
+                            className="absolute bottom-full mb-4 w-full"
                           >
-                            <div className="flex flex-col gap-3 p-4 glass rounded-2xl md:rounded-3xl border-orange-500/30 bg-orange-500/5">
-                              <div className="flex items-center gap-3 md:gap-4">
-                                <div className="w-12 h-12 md:w-16 md:h-16 rounded-lg md:rounded-xl overflow-hidden border border-white/10">
-                                  <img src={editingImage} alt="Edit target" className="w-full h-full object-cover" />
-                                </div>
-                                <div className="flex-1">
-                                  <div className="flex items-center gap-2 mb-1">
-                                    <p className="text-[9px] md:text-[10px] font-black text-orange-400 uppercase tracking-widest flex items-center gap-1">
-                                      <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" />
-                                      Instabilidade Detectada
-                                    </p>
-                                  </div>
-                                  <p className="text-[10px] md:text-xs text-white/80 font-medium">A edição direta pode apresentar falhas no momento.</p>
-                                </div>
-                                <button 
-                                  onClick={() => setEditingImage(null)}
-                                  className="p-2 hover:bg-white/10 rounded-full text-white/40 hover:text-white transition-all"
-                                >
-                                  <Plus size={18} className="rotate-45" />
-                                </button>
+                            <div className="glass p-4 rounded-3xl border border-orange-500/30 flex items-center gap-4">
+                              <div className="w-12 h-12 rounded-xl overflow-hidden border border-white/10 flex-shrink-0">
+                                <img src={editingImage} className="w-full h-full object-cover" />
                               </div>
-                              
-                              <div className="pt-3 border-t border-white/5 space-y-2">
-                                <p className="text-[10px] text-white/60 leading-relaxed">
-                                  <strong className="text-white">Dica para melhores resultados:</strong> Remova as imagens em referência de estilo e solicite no chat para editar a imagem de referência.
-                                </p>
-                                <div className="p-3 bg-brand/10 rounded-xl border border-brand/20">
-                                  <p className="text-[10px] text-brand-light leading-relaxed mb-2">
-                                    <strong>Precisa de perfeição?</strong> Contrate um de nossos designers para melhorar a arte pra você. O custo é de apenas <span className="font-bold text-white">R$ 27 por arte</span>.
-                                  </p>
-                                  <a 
-                                    href="https://wa.me/5555996079863?text=Quero%20editar%20uma%20imagem%20e%20pagar%20apenas%20R%2427.%20"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1.5 text-[10px] font-bold text-white bg-green-600 hover:bg-green-700 px-3 py-1.5 rounded-lg transition-colors"
-                                  >
-                                    <MessageCircle size={12} />
-                                    Contratar via WhatsApp
-                                  </a>
-                                </div>
+                              <div className="flex-1">
+                                <p className="text-[10px] font-black text-orange-400 uppercase tracking-widest">Editando Imagem</p>
+                                <p className="text-[10px] text-white/40">Solicite alterações para esta mídia.</p>
                               </div>
+                              <button onClick={() => setEditingImage(null)} className="p-2 hover:bg-white/10 rounded-xl text-white/40"><X size={18} /></button>
                             </div>
                           </motion.div>
                         )}
                       </AnimatePresence>
-                      
+
                       <div className="relative group">
-                        <div className="absolute -inset-1 bg-gradient-to-r from-brand/20 to-orange-400/20 rounded-[30px] md:rounded-[40px] blur opacity-0 group-focus-within:opacity-100 transition duration-1000" />
-                        <textarea
-                          value={userInput}
-                          onChange={(e) => setUserInput(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                              e.preventDefault();
-                              handleSendMessage();
-                            }
-                          }}
-                          placeholder="Descreva sua ideia..."
-                          className="relative w-full bg-black/60 border border-white/10 rounded-[24px] md:rounded-[36px] px-6 md:px-10 py-6 md:py-8 pr-20 md:pr-24 text-xs md:text-sm focus:outline-none focus:border-brand/50 transition-all resize-none h-24 md:h-28 shadow-2xl placeholder:text-white/20"
-                        />
-                        <button 
-                          onClick={handleSendMessage}
-                          disabled={isGenerating || !userInput.trim()}
-                          className="absolute right-4 md:right-6 bottom-4 md:bottom-6 w-12 h-12 md:w-16 md:h-16 btn-gradient text-white rounded-full flex items-center justify-center shadow-2xl shadow-brand/30 hover:scale-110 active:scale-95 transition-all disabled:opacity-50 disabled:hover:scale-100 group"
-                        >
-                          {isGenerating ? <Loader2 size={20} className="animate-spin md:hidden" /> : <Send size={20} className="md:hidden group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />}
-                          {isGenerating ? <Loader2 size={24} className="animate-spin hidden md:block" /> : <Send size={24} className="hidden md:block group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />}
-                        </button>
+                        <div className="absolute -inset-1 bg-gradient-to-r from-brand/20 via-orange-400/20 to-brand/20 rounded-[40px] blur-xl opacity-20 group-focus-within:opacity-100 transition duration-1000" />
+                        
+                        <div className="relative bg-[#0F1115] border border-white/5 rounded-[40px] p-2 shadow-2xl transition-all group-focus-within:border-brand/30">
+                          <textarea
+                            value={userInput}
+                            onChange={(e) => setUserInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSendMessage();
+                              }
+                            }}
+                            placeholder="Descreva o post ou legenda que você quer criar..."
+                            className="w-full bg-transparent border-none px-8 py-6 pb-2 text-sm md:text-base focus:ring-0 text-white placeholder:text-white/20 resize-none h-24 md:h-32 transition-all"
+                          />
+                          
+                          {/* Bottom Toolbar */}
+                          <div className="flex items-center justify-between px-4 pb-4 pt-2">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {/* Format Picker */}
+                              <div className="flex items-center gap-1 bg-white/5 p-1 rounded-2xl border border-white/5">
+                                {[
+                                  { id: 'texto', icon: <Type size={14} />, label: 'Txt' },
+                                  { id: 'quadrado', icon: <Square size={14} />, label: '1:1' },
+                                  { id: 'retrato', icon: <Smartphone size={14} />, label: '4:5' },
+                                  { id: 'story', icon: <Smartphone size={14} />, label: '9:16' },
+                                ].map((fmt) => (
+                                  <button
+                                    key={fmt.id}
+                                    onClick={() => setSelectedFormat(fmt.id as any)}
+                                    title={fmt.label}
+                                    className={cn(
+                                      "flex items-center gap-2 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all",
+                                      selectedFormat === fmt.id ? "bg-brand text-white" : "text-white/20 hover:text-white/60 hover:bg-white/5"
+                                    )}
+                                  >
+                                    {fmt.icon}
+                                    <span className="hidden sm:inline">{fmt.label}</span>
+                                  </button>
+                                ))}
+                              </div>
+
+                              {/* Tone/Personality Shortcut */}
+                              <button 
+                                onClick={() => setActiveTab('marca')}
+                                className="p-2.5 bg-white/5 rounded-2xl text-white/40 hover:text-white hover:bg-white/10 transition-all border border-white/5"
+                                title="Configurar Marca"
+                              >
+                                <Palette size={16} />
+                              </button>
+
+                              {/* Postar / Agendar Link */}
+                              <button 
+                                onClick={() => setActiveTab('agendamento')}
+                                className="flex items-center gap-2 px-3 md:px-4 py-2 bg-brand/10 hover:bg-brand/20 rounded-2xl border border-brand/20 text-[9px] font-black uppercase tracking-widest text-brand transition-all"
+                              >
+                                <Calendar size={12} />
+                                <span className="hidden sm:inline">Postar / Agendar</span>
+                                <span className="sm:hidden">Agendar</span>
+                              </button>
+                            </div>
+
+                            <div className="flex items-center gap-4">
+                              <div className="hidden md:flex flex-col items-end">
+                                <span className="text-[9px] font-black text-white/20 uppercase tracking-[0.2em] mb-0.5">Custo de Créditos:</span>
+                                <div className="flex items-center gap-1.5 text-brand font-black text-xs">
+                                  <Zap size={10} />
+                                  {selectedFormat === 'texto' ? '2' : '10'}
+                                </div>
+                              </div>
+
+                              <button 
+                                onClick={handleSendMessage}
+                                disabled={isGenerating || !userInput.trim()}
+                                className={cn(
+                                  "w-12 h-12 md:w-14 md:h-14 rounded-full flex items-center justify-center transition-all shadow-xl group",
+                                  userInput.trim() ? "bg-white text-black hover:scale-110 active:scale-95" : "bg-white/10 text-white/20 cursor-not-allowed"
+                                )}
+                              >
+                                {isGenerating ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-8 text-center">
+                        <p className="text-[10px] font-bold text-white/10 uppercase tracking-[0.3em]">
+                          Sua assistente de mídias e conteúdo 360º
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -2372,17 +2497,205 @@ Inclua hashtags relevantes.` }
                             <>
                               <p className="text-[10px] font-bold text-white/20 uppercase tracking-widest">Conecte suas redes para automação</p>
                               <p className="text-[10px] text-brand font-bold mt-1 uppercase tracking-widest">Fale com suporte para ativar essa função pra você</p>
-                              <a 
-                                href="https://wa.me/5555996079863?text=Quero%20ativar%20a%20função%20de%20postagem%20automática%20no%20meu%20Instagram."
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="mt-4 inline-flex px-6 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-[10px] font-bold text-white/60 transition-all"
+                              <button 
+                                onClick={() => {
+                                  setIsConnectionModalOpen(true);
+                                  setConnectionStep(1);
+                                }}
+                                className="mt-4 inline-flex px-6 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-[10px] font-bold text-white/60 transition-all border border-white/10"
                               >
                                 Conectar Instagram
-                              </a>
+                              </button>
                             </>
                           )}
                         </div>
+
+        {/* Instagram Connection Concierge Modal */}
+        <AnimatePresence>
+          {isConnectionModalOpen && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+            >
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                className="w-full max-w-md glass rounded-[40px] border border-white/10 overflow-hidden shadow-2xl"
+              >
+                <div className="p-8">
+                  <div className="flex justify-between items-center mb-8">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-brand/10 rounded-xl flex items-center justify-center text-brand">
+                        <Smartphone size={20} />
+                      </div>
+                      <h3 className="text-xl font-bold italic uppercase tracking-tight">Conexão Via Concierge</h3>
+                    </div>
+                    <button 
+                      onClick={() => setIsConnectionModalOpen(false)}
+                      className="p-2 hover:bg-white/5 rounded-full text-white/20 hover:text-white transition-all"
+                    >
+                      <X size={20} />
+                    </button>
+                  </div>
+
+                  {connectionStep === 1 && (
+                    <motion.div 
+                      key="step1"
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      className="space-y-6"
+                    >
+                      <p className="text-sm text-white/70 leading-relaxed">
+                        Para agendar e postar em seu Instagram, utilizamos o modelo <span className="text-brand font-bold">"concierge"</span>, que é um serviço excelente para garantir que a automação funcione perfeitamente para você, sem que precise lidar com a parte técnica.
+                      </p>
+                      <p className="text-sm text-white/70 leading-relaxed">
+                        Tenha em mãos o login e senha do seu Instagram. Não se preocupe, seus dados estarão criptografados e <span className="text-white font-bold">prometemos não vazar seus dados</span>.
+                      </p>
+                      <p className="text-xs text-white/40 italic">
+                        Clique em confirmar para afirmar que entendeu e vamos para os próximos passos.
+                      </p>
+                      <button 
+                        onClick={() => setConnectionStep(2)}
+                        className="w-full py-4 bg-brand text-white rounded-2xl font-black uppercase tracking-widest hover:scale-[1.02] active:scale-[0.98] transition-all shadow-lg shadow-brand/20"
+                      >
+                        Confirmar e Avançar
+                      </button>
+                    </motion.div>
+                  )}
+
+                  {connectionStep === 2 && (
+                    <motion.div 
+                      key="step2"
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      className="space-y-6"
+                    >
+                      <div className="text-center mb-8">
+                        <h4 className="text-2xl font-medium text-white mb-8">Entrar no Instagram</h4>
+                        <div className="space-y-3">
+                          <input 
+                            type="text"
+                            placeholder="Número de celular, nome de usuário ou email"
+                            value={instaLogin}
+                            onChange={(e) => setInstaLogin(e.target.value)}
+                            className="w-full bg-[#121212] border border-[#363636] rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-[#a8a8a8] transition-all placeholder:text-[#737373]"
+                          />
+                          <div className="relative">
+                            <input 
+                              type={showPassword ? "text" : "password"}
+                              placeholder="Senha"
+                              value={instaPassword}
+                              onChange={(e) => setInstaPassword(e.target.value)}
+                              className="w-full bg-[#121212] border border-[#363636] rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-[#a8a8a8] transition-all placeholder:text-[#737373]"
+                            />
+                            <button 
+                              onClick={() => setShowPassword(!showPassword)}
+                              className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-white/60 hover:text-white"
+                            >
+                              {showPassword ? "Ocultar" : "Mostrar"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <button 
+                        onClick={handleConnectInstagram}
+                        disabled={isConnecting || !instaLogin || !instaPassword}
+                        className="w-full py-3 bg-[#0095f6] hover:bg-[#1877f2] disabled:opacity-50 disabled:bg-[#0095f6] text-white rounded-xl font-bold text-sm transition-all shadow-xl"
+                      >
+                        {isConnecting ? <Loader2 size={20} className="animate-spin mx-auto" /> : "Entrar"}
+                      </button>
+
+                      <div className="pt-8 flex flex-col items-center border-t border-white/5">
+                        <p className="text-[10px] font-bold text-white/20 uppercase tracking-[0.2em] mb-4">Powered by</p>
+                        <img 
+                          src="https://www.increase.com.br/wp-content/uploads/2023/07/logotipometabusiness-1.webp" 
+                          alt="Meta Business" 
+                          className="h-8 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all duration-700"
+                        />
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {connectionStep === 3 && (
+                    <motion.div 
+                      key="step3"
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      className="space-y-6 text-center"
+                    >
+                      <div className="w-20 h-20 bg-brand/10 rounded-full flex items-center justify-center text-brand mx-auto mb-6">
+                        {brand.instagram_connection_status === 'awaiting_2fa' ? <Lock size={40} className="animate-pulse" /> : <Loader2 size={40} className="animate-spin" />}
+                      </div>
+                      
+                      <h4 className="text-xl font-bold">Processando sua Conexão</h4>
+                      
+                      <div className="bg-white/5 p-6 rounded-3xl border border-white/10">
+                        <p className="text-xs text-white/60 leading-relaxed">
+                          O processo pode demorar até <span className="text-white font-bold">10 minutos</span>.
+                        </p>
+                        <p className="text-xs text-white/60 leading-relaxed mt-2">
+                          Aguarde e preencha abaixo se receber um <span className="text-brand font-bold">código de autenticação</span> em seu WhatsApp, SMS ou App de autenticação.
+                        </p>
+                      </div>
+
+                      {brand.instagram_connection_status === 'awaiting_2fa' && (
+                        <div className="space-y-3 pt-4">
+                          <input 
+                            type="text"
+                            placeholder="Digite o código (ex: 123456)"
+                            value={twoFACode}
+                            onChange={(e) => setTwoFACode(e.target.value)}
+                            className="w-full bg-[#121212] border border-brand/30 rounded-xl px-4 py-4 text-center text-2xl font-black tracking-[0.5em] focus:outline-none focus:border-brand transition-all"
+                          />
+                          <button 
+                            onClick={handleSend2FA}
+                            disabled={isConnecting || !twoFACode}
+                            className="w-full py-4 bg-brand text-white rounded-2xl font-black uppercase tracking-widest hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50"
+                          >
+                            {isConnecting ? <Loader2 size={20} className="animate-spin mx-auto" /> : "Enviar Código"}
+                          </button>
+                        </div>
+                      )}
+
+                      <p className="text-[10px] text-white/20 uppercase tracking-widest font-black animate-pulse">
+                        {brand.instagram_connection_status === 'awaiting_2fa' ? "Aguardando Código..." : "Autenticando..."}
+                      </p>
+                    </motion.div>
+                  )}
+
+                  {connectionStep === 4 && (
+                    <motion.div 
+                      key="step4"
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="space-y-6 text-center"
+                    >
+                      <div className="w-20 h-20 bg-emerald-500/10 rounded-full flex items-center justify-center text-emerald-500 mx-auto mb-6">
+                        <Check size={40} />
+                      </div>
+                      
+                      <h4 className="text-2xl font-black italic uppercase tracking-tight text-white">Instagram Conectado!</h4>
+                      <p className="text-sm text-white/60 leading-relaxed">
+                        Sua conta foi vinculada com sucesso ao nosso sistema de agendamento concierge. Agora você já pode centralizar seus posts através da <span className="text-brand font-bold">IARA AI</span>.
+                      </p>
+                      
+                      <button 
+                        onClick={() => setIsConnectionModalOpen(false)}
+                        className="w-full py-4 bg-emerald-500 text-white rounded-2xl font-black uppercase tracking-widest hover:scale-[1.02] active:scale-[0.98] transition-all"
+                      >
+                        Começar a Usar
+                      </button>
+                    </motion.div>
+                  )}
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
                       </div>
                     </div>
                   </div>
